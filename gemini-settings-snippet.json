@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "agentmemory": {
+      "command": "<SHELL_COMMAND>",
+      "args": [
+        "<ABSOLUTE_PATH_TO_AGENTMEMORY>/run-agentmemory-mcp.<ps1-or-sh>"
+      ],
+      "env": {
+        "OPENROUTER_API_KEY": "YOUR_OPENROUTER_API_KEY"
+      }
+    }
+  }
+}
+

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentmemory"
+version = "0.1.0"
+description = "Provider-based shared memory runtime for AI clients, currently shipping Mem0 and Local JSON providers."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "hopt" }
+]
+dependencies = [
+  "mem0ai==1.0.10"
+]
+keywords = ["ai", "memory", "mcp", "mem0", "openrouter", "agents"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Python Modules"
+]
+
+[project.scripts]
+agentmemory = "agentmemory:main"
+agentmemory-clients = "agentmemory_clients:main"
+agentmemory-api = "agentmemory_api:main"
+agentmemory-mcp = "agentmemory_mcp_server:main"
+
+[tool.setuptools]
+py-modules = [
+  "agentmemory",
+  "agentmemory_api",
+  "agentmemory_cli",
+  "agentmemory_http_client",
+  "agentmemory_mcp_server",
+  "agentmemory_platform",
+  "agentmemory_runtime",
+  "agentmemory_clients",
+  "localjson_provider",
+  "memory_provider",
+  "mem0_provider"
+]

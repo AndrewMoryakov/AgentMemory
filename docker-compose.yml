@@ -1,0 +1,12 @@
+services:
+  agentmemory:
+    build: .
+    ports:
+      - "${AGENTMEMORY_PUBLISHED_PORT:-8765}:8765"
+    environment:
+      AGENTMEMORY_API_HOST: "0.0.0.0"
+      AGENTMEMORY_API_PORT: "8765"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
