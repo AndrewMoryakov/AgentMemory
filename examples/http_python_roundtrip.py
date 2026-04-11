@@ -5,7 +5,16 @@ import os
 from urllib.request import Request, urlopen
 
 
-API_BASE = os.environ.get("AGENTMEMORY_API_BASE_URL", "http://127.0.0.1:8765")
+def resolve_api_base() -> str:
+    explicit = os.environ.get("AGENTMEMORY_API_BASE_URL")
+    if explicit:
+        return explicit
+    host = os.environ.get("AGENTMEMORY_API_HOST", "127.0.0.1")
+    port = os.environ.get("AGENTMEMORY_API_PORT", "8765")
+    return f"http://{host}:{port}"
+
+
+API_BASE = resolve_api_base()
 SCOPE = {"user_id": "examples-http-roundtrip"}
 
 
