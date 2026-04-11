@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import agentmemory_admin
-import agentmemory_runtime
+import agentmemory.runtime.admin as agentmemory_admin
+import agentmemory.runtime.config as agentmemory_runtime
 
 
 class AgentMemoryAdminTests(unittest.TestCase):

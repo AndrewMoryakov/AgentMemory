@@ -131,11 +131,11 @@ Infrastructure workarounds such as owner-process mode are acceptable when they r
 
 These layers must remain backend-agnostic:
 
-- `agentmemory_operations.py`
-- `agentmemory_transport.py`
-- `agentmemory_api.py`
-- `agentmemory_mcp_server.py`
-- `agentmemory_http_client.py`
+- `agentmemory/runtime/operations.py`
+- `agentmemory/runtime/transport.py`
+- `agentmemory/api.py`
+- `agentmemory/mcp.py`
+- `agentmemory/runtime/http_client.py`
 
 These layers may contain backend-specific logic:
 

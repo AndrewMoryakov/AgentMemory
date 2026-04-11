@@ -33,33 +33,12 @@ classifiers = [
 ]
 
 [project.scripts]
-agentmemory = "agentmemory:main"
-agentmemory-clients = "agentmemory_clients:main"
-agentmemory-api = "agentmemory_api:main"
-agentmemory-mcp = "agentmemory_mcp_server:main"
-provider-certify = "provider_certify:main"
-provider-certify-ci = "provider_certification_ci:main"
+agentmemory = "agentmemory.cli:main"
+agentmemory-clients = "agentmemory.clients:main"
+agentmemory-api = "agentmemory.api:main"
+agentmemory-mcp = "agentmemory.mcp:main"
+provider-certify = "agentmemory.certification.certify:main"
+provider-certify-ci = "agentmemory.certification.ci:main"
 
-[tool.setuptools]
-py-modules = [
-  "agentmemory",
-  "agentmemory_api",
-  "agentmemory_admin",
-  "agentmemory_cli",
-  "agentmemory_http_client",
-  "agentmemory_interactive",
-  "agentmemory_guidance",
-  "agentmemory_mcp_server",
-  "agentmemory_operation_adapters",
-  "agentmemory_operations",
-  "agentmemory_platform",
-  "agentmemory_runtime",
-  "agentmemory_transport",
-  "agentmemory_clients",
-  "provider_certify",
-  "provider_certification_ci",
-  "provider_certification_policy",
-  "localjson_provider",
-  "memory_provider",
-  "mem0_provider"
-]
+[tool.setuptools.packages.find]
+include = ["agentmemory*"]

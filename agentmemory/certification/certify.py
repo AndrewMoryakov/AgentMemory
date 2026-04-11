@@ -10,9 +10,9 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-from provider_certification_registry import ProviderCertificationTarget, certification_targets
+from agentmemory.certification.registry import ProviderCertificationTarget, certification_targets
+from agentmemory.runtime.config import BASE_DIR
 
-BASE_DIR = Path(__file__).resolve().parent
 TESTS_DIR = BASE_DIR / "tests"
 HARNESS_MODULE = TESTS_DIR / "provider_contract_harness.py"
 

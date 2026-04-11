@@ -1,8 +1,8 @@
 import tempfile
 import unittest
 
-from mem0_provider import Mem0Provider
-from memory_provider import ProviderUnavailableError, ProviderValidationError
+from agentmemory.providers.mem0 import Mem0Provider
+from agentmemory.providers.base import ProviderUnavailableError, ProviderValidationError
 
 
 class Mem0ProviderScopeInventoryTests(unittest.TestCase):

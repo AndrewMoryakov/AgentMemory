@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from memory_provider import ProviderCapabilities, ProviderRuntimePolicy
+from agentmemory.providers.base import ProviderCapabilities, ProviderRuntimePolicy
 
 
 def provider_guidance(

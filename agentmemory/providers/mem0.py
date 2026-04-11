@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover
     Mem0ConfigurationError = RuntimeError  # type: ignore[assignment]
     Mem0MemoryNotFoundError = LookupError  # type: ignore[assignment]
 
-from memory_provider import (
+from agentmemory.providers.base import (
     BaseMemoryProvider,
     DeleteResult,
     MemoryNotFoundError,

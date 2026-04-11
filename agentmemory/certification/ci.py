@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 
-from provider_certification_policy import ProviderCertificationPolicy, certification_policy_targets
-from provider_certify import assess_provider
+from agentmemory.certification.policy import ProviderCertificationPolicy, certification_policy_targets
+from agentmemory.certification.certify import assess_provider
 
 
 def selected_policy_targets(provider_names: list[str] | None = None) -> list[ProviderCertificationPolicy]:

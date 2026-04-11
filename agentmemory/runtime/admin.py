@@ -6,8 +6,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-import agentmemory_clients
-from agentmemory_runtime import (
+import agentmemory.clients as agentmemory_clients
+from agentmemory.runtime.config import (
     active_provider_name,
     memory_delete,
     memory_get,
@@ -16,7 +16,7 @@ from agentmemory_runtime import (
     memory_update,
     runtime_info,
 )
-from memory_provider import (
+from agentmemory.providers.base import (
     ProviderConfigurationError,
     ProviderScopeRequiredError,
     ProviderUnavailableError,

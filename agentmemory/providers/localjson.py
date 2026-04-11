@@ -7,7 +7,7 @@ from threading import Lock
 from typing import Any
 from uuid import uuid4
 
-from memory_provider import (
+from agentmemory.providers.base import (
     BaseMemoryProvider,
     DeleteResult,
     MemoryNotFoundError,

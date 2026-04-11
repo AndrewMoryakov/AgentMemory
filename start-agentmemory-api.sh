@@ -30,7 +30,7 @@ fi
 AGENTMEMORY_API_HOST="$HOST" \
 AGENTMEMORY_API_PORT="$PORT" \
 AGENTMEMORY_OWNER_PROCESS="1" \
-nohup "$BASE_DIR/run-agentmemory-python.sh" "$BASE_DIR/agentmemory_api.py" >>"$LOG_FILE" 2>>"$ERR_FILE" &
+nohup "$BASE_DIR/run-agentmemory-python.sh" -m agentmemory.api >>"$LOG_FILE" 2>>"$ERR_FILE" &
 
 API_PID=$!
 echo "$API_PID" > "$PID_FILE"

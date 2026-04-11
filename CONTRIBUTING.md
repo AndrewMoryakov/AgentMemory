@@ -39,7 +39,7 @@ Run these checks locally:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m py_compile agentmemory.py agentmemory_runtime.py agentmemory_clients.py agentmemory_api.py agentmemory_cli.py agentmemory_mcp_server.py mem0_provider.py memory_provider.py
+.\.venv\Scripts\python.exe -m compileall agentmemory tests mcp-smoke-test.py
 agentmemory mcp-smoke
 agentmemory doctor-clients --compact
 ```
@@ -48,7 +48,7 @@ POSIX shell equivalent:
 
 ```sh
 ./.venv/bin/python -m unittest discover -s tests -v
-./.venv/bin/python -m py_compile agentmemory.py agentmemory_runtime.py agentmemory_clients.py agentmemory_api.py agentmemory_cli.py agentmemory_mcp_server.py mem0_provider.py memory_provider.py
+./.venv/bin/python -m compileall agentmemory tests mcp-smoke-test.py
 agentmemory mcp-smoke
 ```
 

@@ -1,8 +1,8 @@
 import unittest
 
-import agentmemory_operations
-import agentmemory_mcp_server
-from memory_provider import MemoryNotFoundError, ProviderCapabilityError, ProviderScopeRequiredError
+import agentmemory.runtime.operations as agentmemory_operations
+import agentmemory.mcp as agentmemory_mcp_server
+from agentmemory.providers.base import MemoryNotFoundError, ProviderCapabilityError, ProviderScopeRequiredError
 
 
 class AgentMemoryMcpServerTests(unittest.TestCase):

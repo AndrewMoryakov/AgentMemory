@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-import agentmemory_platform
+import agentmemory.platform as agentmemory_platform
 
 
 class AgentMemoryPlatformTests(unittest.TestCase):

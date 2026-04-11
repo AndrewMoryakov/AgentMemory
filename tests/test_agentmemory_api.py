@@ -2,7 +2,7 @@ import io
 import json
 import unittest
 
-import agentmemory_api
+import agentmemory.api as agentmemory_api
 
 
 class AgentMemoryApiTests(unittest.TestCase):

@@ -9,10 +9,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from agentmemory_platform import launcher_command, launcher_path
-from agentmemory_runtime import BASE_DIR, active_provider_runtime_policy, current_api_host, current_api_port
-from agentmemory_transport import error_class_for_type
-from memory_provider import (
+from agentmemory.platform import launcher_command, launcher_path
+from agentmemory.runtime.config import BASE_DIR, active_provider_runtime_policy, current_api_host, current_api_port
+from agentmemory.runtime.transport import error_class_for_type
+from agentmemory.providers.base import (
     ProviderError,
     ProviderUnavailableError,
 )

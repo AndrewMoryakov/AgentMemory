@@ -3,11 +3,11 @@ import sys
 import tempfile
 import unittest
 
-import agentmemory_cli
-import agentmemory_operations
-from localjson_provider import LocalJsonProvider
-from mem0_provider import Mem0Provider
-from memory_provider import (
+import agentmemory.ops_cli as agentmemory_cli
+import agentmemory.runtime.operations as agentmemory_operations
+from agentmemory.providers.localjson import LocalJsonProvider
+from agentmemory.providers.mem0 import Mem0Provider
+from agentmemory.providers.base import (
     MemoryNotFoundError,
     ProviderCapabilityError,
     ProviderScopeRequiredError,

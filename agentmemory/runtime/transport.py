@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from memory_provider import (
+from agentmemory.providers.base import (
     MemoryNotFoundError,
     ProviderCapabilityError,
     ProviderCapabilities,

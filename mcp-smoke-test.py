@@ -2,7 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from agentmemory_platform import launcher_command, launcher_path
+from agentmemory.platform import launcher_command, launcher_path
 
 BASE_DIR = Path(__file__).resolve().parent
 SERVER = launcher_path(BASE_DIR, "run-agentmemory-mcp")

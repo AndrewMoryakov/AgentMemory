@@ -6,8 +6,8 @@ from io import StringIO
 from pathlib import Path
 from unittest import mock
 
-import agentmemory
-import agentmemory_runtime
+import agentmemory.cli as agentmemory
+import agentmemory.runtime.config as agentmemory_runtime
 
 
 class AgentMemoryCoreTests(unittest.TestCase):

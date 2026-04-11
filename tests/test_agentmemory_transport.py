@@ -1,6 +1,6 @@
 import unittest
 
-from agentmemory_transport import (
+from agentmemory.runtime.transport import (
     build_list_kwargs,
     build_search_kwargs,
     capability_summary,
@@ -14,7 +14,7 @@ from agentmemory_transport import (
     validate_list_request,
     validate_search_request,
 )
-from memory_provider import (
+from agentmemory.providers.base import (
     MemoryNotFoundError,
     ProviderCapabilityError,
     ProviderScopeRequiredError,

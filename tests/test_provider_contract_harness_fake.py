@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 import unittest
 
-from memory_provider import (
+from agentmemory.providers.base import (
     BaseMemoryProvider,
     DeleteResult,
     MemoryNotFoundError,

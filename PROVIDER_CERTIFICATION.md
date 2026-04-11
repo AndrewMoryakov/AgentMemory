@@ -11,7 +11,7 @@ AgentMemory `Provider Contract V1` requires more than method compatibility. A pr
 
 ## 1. Interface and contract
 
-The provider must implement the `BaseMemoryProvider` contract from `memory_provider.py`.
+The provider must implement the `BaseMemoryProvider` contract from `agentmemory/providers/base.py`.
 
 Required behaviors:
 

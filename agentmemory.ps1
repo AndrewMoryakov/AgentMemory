@@ -5,17 +5,16 @@ param(
 
 $base = $PSScriptRoot
 $venvPython = Join-Path $base '.venv\Scripts\python.exe'
-$script = Join-Path $base 'agentmemory.py'
 
 if (Test-Path $venvPython) {
-    & $venvPython $script @Args
+    & $venvPython -m agentmemory @Args
     exit $LASTEXITCODE
 }
 
 if (Get-Command python -ErrorAction SilentlyContinue) {
-    & python $script @Args
+    & python -m agentmemory @Args
     exit $LASTEXITCODE
 }
 
-& py -3.13 $script @Args
+& py -3.13 -m agentmemory @Args
 exit $LASTEXITCODE

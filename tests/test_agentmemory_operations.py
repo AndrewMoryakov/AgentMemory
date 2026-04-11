@@ -1,7 +1,7 @@
 import unittest
 
-import agentmemory_operations
-from memory_provider import ProviderValidationError
+import agentmemory.runtime.operations as agentmemory_operations
+from agentmemory.providers.base import ProviderValidationError
 
 
 class AgentMemoryOperationsTests(unittest.TestCase):

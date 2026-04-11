@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 import unittest
 
-from mem0_provider import Mem0Provider
-from memory_provider import MemoryNotFoundError, ProviderScopeRequiredError
+from agentmemory.providers.mem0 import Mem0Provider
+from agentmemory.providers.base import MemoryNotFoundError, ProviderScopeRequiredError
 try:
     from provider_contract_harness import ProviderContractHarness
 except ModuleNotFoundError:  # pragma: no cover

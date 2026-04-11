@@ -2,7 +2,6 @@ param()
 
 $base = $PSScriptRoot
 $python = Join-Path $base '.venv\Scripts\python.exe'
-$script = Join-Path $base 'agentmemory_mcp_server.py'
 $envFile = Join-Path $base '.env'
 
 if ((-not $env:OPENROUTER_API_KEY) -and (Test-Path $envFile)) {
@@ -15,5 +14,5 @@ if ((-not $env:OPENROUTER_API_KEY) -and (Test-Path $envFile)) {
     }
 }
 
-& $python $script
+& $python -m agentmemory.mcp
 exit $LASTEXITCODE

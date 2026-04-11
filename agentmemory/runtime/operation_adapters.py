@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from memory_provider import ProviderValidationError
+from agentmemory.providers.base import ProviderValidationError
 
 
 def operation_name_for_mcp_tool(tool_name: str) -> str:

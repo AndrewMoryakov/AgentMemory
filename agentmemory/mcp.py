@@ -3,10 +3,10 @@ import sys
 import traceback
 from typing import Any
 
-from agentmemory_operation_adapters import mcp_operation_source
-from agentmemory_operations import OPERATIONS_BY_MCP_NAME, mcp_tools
-from agentmemory_transport import mcp_result, provider_error_payload
-from memory_provider import ProviderError
+from agentmemory.runtime.operation_adapters import mcp_operation_source
+from agentmemory.runtime.operations import OPERATIONS_BY_MCP_NAME, mcp_tools
+from agentmemory.runtime.transport import mcp_result, provider_error_payload
+from agentmemory.providers.base import ProviderError
 
 SERVER_INFO = {
     "name": "agentmemory",

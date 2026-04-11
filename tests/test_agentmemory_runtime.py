@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from pathlib import Path
 
-import agentmemory_runtime
+import agentmemory.runtime.config as agentmemory_runtime
 
 
 class AgentMemoryRuntimeTests(unittest.TestCase):

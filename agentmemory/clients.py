@@ -7,8 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
-BASE_DIR = Path(__file__).resolve().parent
+from agentmemory.runtime.config import BASE_DIR
 RUN_MCP = BASE_DIR / "run-agentmemory-mcp.ps1"
 SERVER_NAME = "agentmemory"
 BACKUP_ROOT = BASE_DIR / "data" / "backups" / "client-configs"

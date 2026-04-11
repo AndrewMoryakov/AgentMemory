@@ -8,11 +8,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml README.md LICENSE ./
-COPY *.py ./
+COPY agentmemory ./agentmemory
+COPY web ./web
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 
 EXPOSE 8765
 
-CMD ["python", "agentmemory_api.py"]
+CMD ["python", "-m", "agentmemory.api"]

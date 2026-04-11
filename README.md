@@ -86,6 +86,18 @@ This path proves:
 - the HTTP API works
 - one client surface can read and write memory immediately
 
+### Local Runtime Files
+
+AgentMemory generates local runtime state during setup and use.
+
+These files are local-only and should not be committed:
+
+- `.env`
+- `agentmemory.config.json`
+- `data/`
+
+The repository only ships safe templates such as `.env.example`.
+
 ### Main Semantic Backend
 
 If you want the main semantic path, switch to `mem0`:
@@ -237,7 +249,7 @@ Useful local checks:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m py_compile agentmemory.py agentmemory_runtime.py agentmemory_clients.py agentmemory_api.py agentmemory_cli.py agentmemory_mcp_server.py mem0_provider.py memory_provider.py
+.\.venv\Scripts\python.exe -m compileall agentmemory tests mcp-smoke-test.py
 agentmemory mcp-smoke
 ```
 

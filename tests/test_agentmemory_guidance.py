@@ -1,6 +1,6 @@
 import unittest
 
-from agentmemory_guidance import client_runtime_guidance, guidance_summary_lines, provider_guidance
+from agentmemory.guidance import client_runtime_guidance, guidance_summary_lines, provider_guidance
 
 
 class AgentMemoryGuidanceTests(unittest.TestCase):

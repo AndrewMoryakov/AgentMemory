@@ -4,9 +4,9 @@ import sys
 import unittest
 from unittest import mock
 
-import provider_certification_ci
-import provider_certification_policy
-from provider_certify import CertificationAssessment
+import agentmemory.certification.ci as provider_certification_ci
+import agentmemory.certification.policy as provider_certification_policy
+from agentmemory.certification.certify import CertificationAssessment
 
 
 def make_assessment(*, provider_name: str, status_code: str, verdict: str = "certified") -> CertificationAssessment:

@@ -2,9 +2,9 @@ import argparse
 import json
 import sys
 
-from agentmemory_operation_adapters import cli_operation_source
-from agentmemory_operations import OPERATIONS
-from memory_provider import ProviderError, ProviderValidationError
+from agentmemory.runtime.operation_adapters import cli_operation_source
+from agentmemory.runtime.operations import OPERATIONS
+from agentmemory.providers.base import ProviderError, ProviderValidationError
 
 
 def print_json(data):

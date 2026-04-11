@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from agentmemory_admin import (
+from agentmemory.runtime.admin import (
     admin_stats,
     delete_admin_memory,
     get_admin_memory,
@@ -13,14 +13,14 @@ from agentmemory_admin import (
     pin_admin_memory,
     update_admin_memory,
 )
-from agentmemory_operation_adapters import http_operation_source
-from agentmemory_operations import OPERATIONS
-from agentmemory_runtime import BASE_DIR, current_api_host, current_api_port
-from agentmemory_transport import (
+from agentmemory.runtime.operation_adapters import http_operation_source
+from agentmemory.runtime.operations import OPERATIONS
+from agentmemory.runtime.config import BASE_DIR, current_api_host, current_api_port
+from agentmemory.runtime.transport import (
     provider_error_payload,
     provider_error_status,
 )
-from memory_provider import (
+from agentmemory.providers.base import (
     MemoryNotFoundError,
     ProviderError,
     ProviderValidationError,

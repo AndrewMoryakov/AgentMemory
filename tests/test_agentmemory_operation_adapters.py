@@ -1,13 +1,13 @@
 import argparse
 import unittest
 
-from agentmemory_operation_adapters import (
+from agentmemory.runtime.operation_adapters import (
     cli_operation_source,
     http_operation_source,
     mcp_operation_source,
     operation_name_for_mcp_tool,
 )
-from memory_provider import ProviderValidationError
+from agentmemory.providers.base import ProviderValidationError
 
 
 class AgentMemoryOperationAdaptersTests(unittest.TestCase):

@@ -1,7 +1,7 @@
 import tempfile
 from abc import ABC, abstractmethod
 
-from memory_provider import MemoryNotFoundError, ProviderCapabilityError
+from agentmemory.providers.base import MemoryNotFoundError, ProviderCapabilityError
 
 
 class ProviderContractHarness(ABC):

@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import provider_certify
-import provider_certification_registry
+import agentmemory.certification.certify as provider_certify
+import agentmemory.certification.registry as provider_certification_registry
 
 
 class ProviderCertifyTests(unittest.TestCase):

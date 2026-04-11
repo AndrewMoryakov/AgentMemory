@@ -1,6 +1,6 @@
 import unittest
 
-from localjson_provider import LocalJsonProvider
+from agentmemory.providers.localjson import LocalJsonProvider
 from tests.provider_contract_harness import ProviderContractHarness
 
 

@@ -1,8 +1,8 @@
 import os
 import unittest
 
-import agentmemory_http_client
-from memory_provider import (
+import agentmemory.runtime.http_client as agentmemory_http_client
+from agentmemory.providers.base import (
     MemoryNotFoundError,
     ProviderCapabilityError,
     ProviderScopeRequiredError,

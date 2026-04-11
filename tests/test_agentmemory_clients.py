@@ -3,7 +3,7 @@ import tempfile
 import json
 from pathlib import Path
 
-import agentmemory_clients
+import agentmemory.clients as agentmemory_clients
 
 
 class AgentMemoryClientsTests(unittest.TestCase):

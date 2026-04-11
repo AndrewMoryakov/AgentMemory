@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from agentmemory_http_client import (
+from agentmemory.runtime.http_client import (
     proxy_add,
     proxy_delete,
     proxy_get,
@@ -14,7 +14,7 @@ from agentmemory_http_client import (
     proxy_update,
     should_proxy_to_api,
 )
-from agentmemory_runtime import (
+from agentmemory.runtime.config import (
     active_provider_capabilities,
     active_provider_name,
     health,
@@ -26,7 +26,7 @@ from agentmemory_runtime import (
     memory_search,
     memory_update,
 )
-from agentmemory_transport import execute_transport_operation, validate_and_build_list_kwargs, validate_and_build_search_kwargs
+from agentmemory.runtime.transport import execute_transport_operation, validate_and_build_list_kwargs, validate_and_build_search_kwargs
 
 
 @dataclass(frozen=True)

@@ -10,4 +10,4 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
-exec "$BASE_DIR/run-agentmemory-python.sh" "$BASE_DIR/agentmemory_mcp_server.py"
+exec "$BASE_DIR/run-agentmemory-python.sh" -m agentmemory.mcp

@@ -8,7 +8,6 @@ $pidFile = Join-Path $base 'data\agentmemory-api.pid'
 $logFile = Join-Path $base 'data\agentmemory-api.log'
 $errorFile = Join-Path $base 'data\agentmemory-api.err.log'
 $python = Join-Path $base '.venv\Scripts\python.exe'
-$script = Join-Path $base 'agentmemory_api.py'
 $envFile = Join-Path $base '.env'
 
 if ((-not $env:OPENROUTER_API_KEY) -and (Test-Path $envFile)) {
@@ -39,7 +38,7 @@ if (Test-Path $pidFile) {
 $env:AGENTMEMORY_API_HOST = $BindHost
 $env:AGENTMEMORY_API_PORT = [string]$Port
 $env:AGENTMEMORY_OWNER_PROCESS = '1'
-$process = Start-Process -FilePath $python -ArgumentList @("`"$script`"") -WorkingDirectory $base -RedirectStandardOutput $logFile -RedirectStandardError $errorFile -WindowStyle Hidden -PassThru
+$process = Start-Process -FilePath $python -ArgumentList @('-m', 'agentmemory.api') -WorkingDirectory $base -RedirectStandardOutput $logFile -RedirectStandardError $errorFile -WindowStyle Hidden -PassThru
 $process.Id | Set-Content -LiteralPath $pidFile -Encoding ASCII
 
 $started = $false

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agentmemory_runtime import provider_class
+from agentmemory.runtime.config import provider_class
 
 
 @dataclass(frozen=True)

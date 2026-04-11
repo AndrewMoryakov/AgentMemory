@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import agentmemory_interactive
+import agentmemory.interactive as agentmemory_interactive
 
 
 class AgentMemoryInteractiveTests(unittest.TestCase):
@@ -55,11 +55,11 @@ class AgentMemoryInteractiveTests(unittest.TestCase):
         self.assertIn('Provider requires scope for search.', text)
 
     def test_prompt_toolkit_availability_requires_tty(self) -> None:
-        with mock.patch('agentmemory_interactive.PromptSession', object()), \
-             mock.patch('agentmemory_interactive.InMemoryHistory', object()), \
-             mock.patch('agentmemory_interactive.CompleteStyle', object()), \
-             mock.patch('agentmemory_interactive.sys.stdin.isatty', return_value=False), \
-             mock.patch('agentmemory_interactive.sys.stdout.isatty', return_value=True):
+        with mock.patch('agentmemory.interactive.PromptSession', object()), \
+             mock.patch('agentmemory.interactive.InMemoryHistory', object()), \
+             mock.patch('agentmemory.interactive.CompleteStyle', object()), \
+             mock.patch('agentmemory.interactive.sys.stdin.isatty', return_value=False), \
+             mock.patch('agentmemory.interactive.sys.stdout.isatty', return_value=True):
             self.assertFalse(agentmemory_interactive.prompt_toolkit_available())
 
 
