@@ -15,7 +15,7 @@ from agentmemory_admin import (
 )
 from agentmemory_operation_adapters import http_operation_source
 from agentmemory_operations import OPERATIONS
-from agentmemory_runtime import API_HOST, API_PORT, BASE_DIR
+from agentmemory_runtime import BASE_DIR, current_api_host, current_api_port
 from agentmemory_transport import (
     provider_error_payload,
     provider_error_status,
@@ -220,8 +220,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.environ["AGENTMEMORY_OWNER_PROCESS"] = "1"
-    server = ThreadingHTTPServer((API_HOST, API_PORT), Handler)
-    print(f"AgentMemory API listening on http://{API_HOST}:{API_PORT}")
+    api_host = current_api_host()
+    api_port = current_api_port()
+    server = ThreadingHTTPServer((api_host, api_port), Handler)
+    print(f"AgentMemory API listening on http://{api_host}:{api_port}")
     server.serve_forever()
 
 
