@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -394,6 +395,21 @@ def api_is_ready(host: str, port: int, *, timeout_seconds: float = 2.0) -> bool:
         return False
 
 
+def can_bind_api_port(host: str, port: int) -> bool:
+    try:
+        with socket.create_server((host, port), backlog=1):
+            return True
+    except OSError:
+        return False
+
+
+def find_available_api_port(host: str, preferred_port: int, *, search_limit: int = 50) -> int | None:
+    for candidate in range(preferred_port, preferred_port + search_limit):
+        if can_bind_api_port(host, candidate):
+            return candidate
+    return None
+
+
 def read_api_pid() -> int | None:
     if not API_PID_FILE.exists():
         return None
@@ -509,6 +525,24 @@ def stop_api_process() -> tuple[bool, str]:
     if success:
         return True, f'Stopped AgentMemory API process {pid}'
     return False, details
+
+
+def resolve_api_start_port(host: str, requested_port: int) -> tuple[int | None, str | None]:
+    if can_bind_api_port(host, requested_port):
+        return requested_port, None
+    selected_port = find_available_api_port(host, requested_port + 1)
+    if selected_port is None:
+        return None, f'Port {requested_port} is busy and no free port was found near it.'
+    return selected_port, f'Port {requested_port} is busy; using {selected_port} instead and updating runtime config.'
+
+
+def persist_runtime_api_port(port: int) -> None:
+    config = read_config()
+    runtime = config.setdefault('runtime', {})
+    if runtime.get('api_port') == port:
+        return
+    runtime['api_port'] = port
+    write_config(config)
 
 
 def command_install(args: argparse.Namespace) -> int:
@@ -701,7 +735,18 @@ def command_doctor(_: argparse.Namespace) -> int:
 
 def command_start_api(args: argparse.Namespace) -> int:
     heading('AgentMemory API')
-    ok_result, message = start_api_process(args.host, args.port)
+    selected_port, port_message = resolve_api_start_port(args.host, args.port)
+    if selected_port is None:
+        print(err(port_message or f'Unable to start AgentMemory API on {args.host}:{args.port}.'))
+        return 1
+    updated_config_port = False
+    if selected_port != args.port:
+        persist_runtime_api_port(selected_port)
+        updated_config_port = True
+        print(warn(port_message or f'Using alternate API port {selected_port}.'))
+    ok_result, message = start_api_process(args.host, selected_port)
+    if not ok_result and updated_config_port:
+        persist_runtime_api_port(args.port)
     print(ok(message) if ok_result else err(message))
     return 0 if ok_result else 1
 

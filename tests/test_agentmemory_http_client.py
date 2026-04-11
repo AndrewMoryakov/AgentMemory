@@ -103,6 +103,28 @@ class AgentMemoryHttpClientTests(unittest.TestCase):
         self.assertIn("kind=user", str(captured["path"]))
         self.assertIn("query=def", str(captured["path"]))
 
+    def test_ensure_api_running_clears_runtime_cache_after_launcher_start(self) -> None:
+        original_api_is_healthy = agentmemory_http_client.api_is_healthy
+        original_subprocess_run = agentmemory_http_client.subprocess.run
+        original_clear_caches = agentmemory_http_client.clear_caches
+        original_time_sleep = agentmemory_http_client.time.sleep
+        calls: list[str] = []
+        health_checks = iter([False, True])
+        try:
+            agentmemory_http_client.api_is_healthy = lambda: next(health_checks)  # type: ignore[assignment]
+            agentmemory_http_client.subprocess.run = lambda *args, **kwargs: None  # type: ignore[assignment]
+            agentmemory_http_client.clear_caches = lambda: calls.append("cleared")  # type: ignore[assignment]
+            agentmemory_http_client.time.sleep = lambda *_args, **_kwargs: None  # type: ignore[assignment]
+
+            agentmemory_http_client.ensure_api_running()
+        finally:
+            agentmemory_http_client.api_is_healthy = original_api_is_healthy  # type: ignore[assignment]
+            agentmemory_http_client.subprocess.run = original_subprocess_run  # type: ignore[assignment]
+            agentmemory_http_client.clear_caches = original_clear_caches  # type: ignore[assignment]
+            agentmemory_http_client.time.sleep = original_time_sleep  # type: ignore[assignment]
+
+        self.assertEqual(calls, ["cleared"])
+
     def test_http_error_type_maps_to_typed_error(self) -> None:
         original_urlopen = agentmemory_http_client.urlopen
         try:

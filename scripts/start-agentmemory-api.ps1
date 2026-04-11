@@ -38,55 +38,9 @@ if (Test-Path $pidFile) {
 $env:AGENTMEMORY_API_HOST = $BindHost
 $env:AGENTMEMORY_API_PORT = [string]$Port
 $env:AGENTMEMORY_OWNER_PROCESS = '1'
-$process = Start-Process -FilePath $python -ArgumentList @('-m', 'agentmemory.api') -WorkingDirectory $base -RedirectStandardOutput $logFile -RedirectStandardError $errorFile -WindowStyle Hidden -PassThru
-$process.Id | Set-Content -LiteralPath $pidFile -Encoding ASCII
-
-$started = $false
-for ($i = 0; $i -lt 80; $i++) {
-    Start-Sleep -Milliseconds 250
-    $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
-    if (-not $running) {
-        break
-    }
-
-    try {
-        $health = Invoke-RestMethod -Method Get -Uri "http://$BindHost`:$Port/health" -TimeoutSec 2 -ErrorAction Stop
-        if ($health.ok -eq $true) {
-            $started = $true
-            break
-        }
-    } catch {
-    }
-
-    $listening = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-        Where-Object { $_.LocalPort -eq $Port -and ($_.LocalAddress -eq $BindHost -or $_.LocalAddress -eq '0.0.0.0' -or $_.LocalAddress -eq '::') }
-    if ($listening) {
-        $started = $true
-        break
-    }
+$result = & $python -m agentmemory.cli start-api --host $BindHost --port $Port 2>&1
+$exitCode = $LASTEXITCODE
+if ($result) {
+    $result | ForEach-Object { Write-Output $_ }
 }
-
-if (-not $started) {
-    $running = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
-    if ($running) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    }
-    Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
-
-    $errorText = ''
-    if (Test-Path $errorFile) {
-        $errorText = (Get-Content -LiteralPath $errorFile -Raw -ErrorAction SilentlyContinue | Out-String).Trim()
-    }
-    if (-not $errorText -and (Test-Path $logFile)) {
-        $errorText = (Get-Content -LiteralPath $logFile -Raw -ErrorAction SilentlyContinue | Out-String).Trim()
-    }
-
-    if ($errorText) {
-        Write-Error "AgentMemory API failed to start on $BindHost`:$Port. $errorText"
-    } else {
-        Write-Error "AgentMemory API failed to start on $BindHost`:$Port."
-    }
-    exit 1
-}
-
-Write-Output "AgentMemory API started with PID $($process.Id) on http://$BindHost`:$Port. Logs: $logFile, $errorFile"
+exit $exitCode

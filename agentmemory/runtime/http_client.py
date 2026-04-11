@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from agentmemory.platform import launcher_command, launcher_path
-from agentmemory.runtime.config import BASE_DIR, active_provider_runtime_policy, current_api_host, current_api_port
+from agentmemory.runtime.config import BASE_DIR, active_provider_runtime_policy, clear_caches, current_api_host, current_api_port
 from agentmemory.runtime.transport import error_class_for_type
 from agentmemory.providers.base import (
     ProviderError,
@@ -90,6 +90,7 @@ def ensure_api_running() -> None:
         errors="replace",
         capture_output=True,
     )
+    clear_caches()
 
     deadline = time.time() + API_START_TIMEOUT_SECONDS
     while time.time() < deadline:

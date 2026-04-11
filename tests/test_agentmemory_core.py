@@ -95,6 +95,65 @@ class AgentMemoryCoreTests(unittest.TestCase):
             agentmemory_runtime.clear_caches()
             temp_dir.cleanup()
 
+    def test_resolve_api_start_port_returns_requested_port_when_free(self) -> None:
+        original_can_bind_api_port = agentmemory.can_bind_api_port
+        try:
+            agentmemory.can_bind_api_port = lambda host, port: True  # type: ignore[assignment]
+            selected_port, message = agentmemory.resolve_api_start_port("127.0.0.1", 8765)
+        finally:
+            agentmemory.can_bind_api_port = original_can_bind_api_port  # type: ignore[assignment]
+
+        self.assertEqual(selected_port, 8765)
+        self.assertIsNone(message)
+
+    def test_command_start_api_uses_free_port_and_updates_config_when_requested_port_is_busy(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        base = Path(temp_dir.name)
+        original_config_path = agentmemory_runtime.CONFIG_PATH
+        original_env_path = agentmemory_runtime.ENV_PATH
+        original_agentmemory_config_path = agentmemory.CONFIG_PATH
+        original_agentmemory_env_path = agentmemory.ENV_PATH
+        original_resolve_api_start_port = agentmemory.resolve_api_start_port
+        original_start_api_process = agentmemory.start_api_process
+        original_stdout = agentmemory.sys.stdout
+        buffer = StringIO()
+        started: dict[str, object] = {}
+        try:
+            agentmemory_runtime.CONFIG_PATH = base / "agentmemory.config.json"
+            agentmemory_runtime.ENV_PATH = base / ".env"
+            agentmemory.CONFIG_PATH = agentmemory_runtime.CONFIG_PATH
+            agentmemory.ENV_PATH = agentmemory_runtime.ENV_PATH
+            agentmemory_runtime.write_runtime_config(agentmemory_runtime.default_runtime_config())
+
+            agentmemory.resolve_api_start_port = lambda host, port: (8766, "Port 8765 is busy; using 8766 instead and updating runtime config.")  # type: ignore[assignment]
+
+            def fake_start_api_process(host: str, port: int):
+                started["host"] = host
+                started["port"] = port
+                return True, f"AgentMemory API started on http://{host}:{port}"
+
+            agentmemory.start_api_process = fake_start_api_process  # type: ignore[assignment]
+            agentmemory.sys.stdout = buffer
+
+            rc = agentmemory.command_start_api(argparse.Namespace(host="127.0.0.1", port=8765))
+            updated = agentmemory_runtime.load_runtime_config()
+        finally:
+            agentmemory_runtime.CONFIG_PATH = original_config_path
+            agentmemory_runtime.ENV_PATH = original_env_path
+            agentmemory.CONFIG_PATH = original_agentmemory_config_path
+            agentmemory.ENV_PATH = original_agentmemory_env_path
+            agentmemory.resolve_api_start_port = original_resolve_api_start_port  # type: ignore[assignment]
+            agentmemory.start_api_process = original_start_api_process  # type: ignore[assignment]
+            agentmemory.sys.stdout = original_stdout
+            agentmemory_runtime.clear_caches()
+            temp_dir.cleanup()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(started["host"], "127.0.0.1")
+        self.assertEqual(started["port"], 8766)
+        self.assertEqual(updated["runtime"]["api_port"], 8766)
+        self.assertIn("Port 8765 is busy; using 8766 instead", buffer.getvalue())
+
     def test_provider_certify_subcommand_lists_targets_as_json(self) -> None:
         parser = agentmemory.build_parser()
         args = parser.parse_args(["provider-certify", "--list", "--json"])
