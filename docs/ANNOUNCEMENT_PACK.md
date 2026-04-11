@@ -35,13 +35,32 @@ That is a fair question, and in many cases the honest answer is: you probably sh
 
 ```powershell
 py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e .
-agentmemory configure --provider localjson
-agentmemory doctor
-agentmemory start-api
+.\.venv\Scripts\agentmemory.exe configure --provider localjson
+.\.venv\Scripts\agentmemory.exe doctor
+.\.venv\Scripts\agentmemory.exe start-api
 .\.venv\Scripts\python.exe .\examples\http_python_roundtrip.py
-agentmemory mcp-smoke
+.\.venv\Scripts\python.exe -m agentmemory.ops_cli list --user-id examples-http-roundtrip --limit 5
+.\.venv\Scripts\agentmemory.exe stop-api
 ```
+
+## Runtime Stabilization Update
+
+This update is about one thing: making the first-run experience much more trustworthy.
+
+Main changes:
+
+- the documented `localjson` onboarding path is now a real copy-paste flow, not a best-effort sketch
+- quickstart commands now use explicit `.venv` paths instead of assuming shell activation or PATH state
+- the shared-runtime demo now matches the actual CLI and API behavior
+- Windows API lifecycle handling is more reliable and now tracks the real listener PID instead of a launcher/shim PID
+- API readiness and `/health` no longer get tangled in self-probing runtime diagnostics during startup
+- `doctor` is less noisy for the `localjson` path and no longer treats a missing `.env` as a generic warning by default
+
+Short version:
+
+The project is now materially easier to try from a clean checkout, especially on Windows.
 
 ## What Changed Since v0.1.0
 
@@ -85,13 +104,31 @@ Quick local path:
 
 ```powershell
 py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e .
-agentmemory configure --provider localjson
-agentmemory doctor
-agentmemory start-api
+.\.venv\Scripts\agentmemory.exe configure --provider localjson
+.\.venv\Scripts\agentmemory.exe doctor
+.\.venv\Scripts\agentmemory.exe start-api
 .\.venv\Scripts\python.exe .\examples\http_python_roundtrip.py
-agentmemory mcp-smoke
+.\.venv\Scripts\python.exe -m agentmemory.ops_cli list --user-id examples-http-roundtrip --limit 5
+.\.venv\Scripts\agentmemory.exe stop-api
 ```
+
+## Short Release Update
+
+Pushed a runtime/onboarding stabilization update for `AgentMemory`.
+
+What changed:
+
+- the `localjson` quickstart now works as a true fresh-run path
+- API lifecycle tracking on Windows is more reliable
+- startup readiness no longer trips over self-diagnostics
+- onboarding docs now match the real working commands
+- the shared-runtime demo is now the canonical first-run story
+
+This is not a new feature wave. It is a trust wave.
+
+If you looked at the project before and the runtime story felt too fragile, this update specifically targets that.
 
 ## X / Telegram Version
 
