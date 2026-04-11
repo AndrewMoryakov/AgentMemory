@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -31,6 +32,19 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         self.assertEqual(source, "default")
         self.assertEqual(path, agentmemory_runtime.CONFIG_PATH)
         self.assertEqual(config["runtime"]["provider"], "mem0")
+
+    def test_module_can_be_imported_with_missing_config_file(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "agentmemory_runtime_import_probe",
+            Path(agentmemory_runtime.__file__),
+        )
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec is not None
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        self.assertEqual(module.default_runtime_config()["runtime"]["provider"], "mem0")
 
     def test_runtime_info_reports_provider_and_config_source(self) -> None:
         generic = agentmemory_runtime.default_runtime_config()

@@ -87,10 +87,6 @@ def current_api_port() -> int:
     return int(os.environ.get("AGENTMEMORY_API_PORT", str(config["runtime"].get("api_port", 8765))))
 
 
-API_HOST = current_api_host()
-API_PORT = current_api_port()
-
-
 def provider_registry() -> dict[str, type[BaseMemoryProvider]]:
     return {
         "localjson": LocalJsonProvider,
