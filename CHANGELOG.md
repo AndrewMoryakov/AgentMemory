@@ -6,7 +6,17 @@ The format is intentionally simple during public alpha.
 
 ## [Unreleased]
 
-- no unreleased entries yet
+### Changed
+
+- onboarding and quickstart docs now use explicit `.venv` command paths and a single canonical `localjson`-first shared-runtime flow
+- `doctor` now treats a missing `.env` as informational instead of warning by default, which makes the `localjson` onboarding path less noisy
+
+### Fixed
+
+- Windows API lifecycle tracking now records the real listener PID instead of a launcher/shim PID
+- API readiness no longer self-recurses through heavy `/health` diagnostics during startup
+- API lifecycle recovery now handles matching untracked listeners more cleanly when PID/state files are missing
+- shared-runtime onboarding docs now use the working `agentmemory.ops_cli` data-operation path instead of nonexistent top-level `agentmemory list/search` commands
 
 ## [0.1.1] - 2026-04-11
 

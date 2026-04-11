@@ -265,6 +265,44 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["api_runtime"]["listener_pid"], 222)
         self.assertFalse(payload["api_runtime"]["recorded_pid_owns_listener"])
 
+    def test_api_runtime_diagnostics_reports_running_untracked_for_matching_listener_without_pid_file(self) -> None:
+        generic = agentmemory_runtime.default_runtime_config()
+        generic["runtime"]["provider"] = "localjson"
+        generic["providers"]["localjson"] = agentmemory_runtime.provider_class("localjson").default_provider_config(
+            runtime_dir=self.temp_dir.name
+        )
+        agentmemory_runtime.write_runtime_config(generic)
+
+        original_read_api_pid = agentmemory_runtime.read_api_pid
+        original_process_exists = agentmemory_runtime.process_exists
+        original_can_bind_api_port = agentmemory_runtime.can_bind_api_port
+        original_listening_pid_for_api_port = agentmemory_runtime.listening_pid_for_api_port
+        original_read_api_state = agentmemory_runtime.read_api_state
+        original_api_health_payload = agentmemory_runtime.api_health_payload
+        try:
+            agentmemory_runtime.read_api_pid = lambda: None  # type: ignore[assignment]
+            agentmemory_runtime.process_exists = lambda pid: False  # type: ignore[assignment]
+            agentmemory_runtime.can_bind_api_port = lambda host, port: False  # type: ignore[assignment]
+            agentmemory_runtime.listening_pid_for_api_port = lambda host, port: 222  # type: ignore[assignment]
+            agentmemory_runtime.read_api_state = lambda: None  # type: ignore[assignment]
+            agentmemory_runtime.api_health_payload = lambda host, port, timeout_seconds=1.0: {  # type: ignore[assignment]
+                "ok": True,
+                "runtime_identity": {"runtime_id": agentmemory_runtime.runtime_identity()["runtime_id"]},
+            }
+
+            payload = agentmemory_runtime.runtime_info()
+        finally:
+            agentmemory_runtime.read_api_pid = original_read_api_pid  # type: ignore[assignment]
+            agentmemory_runtime.process_exists = original_process_exists  # type: ignore[assignment]
+            agentmemory_runtime.can_bind_api_port = original_can_bind_api_port  # type: ignore[assignment]
+            agentmemory_runtime.listening_pid_for_api_port = original_listening_pid_for_api_port  # type: ignore[assignment]
+            agentmemory_runtime.read_api_state = original_read_api_state  # type: ignore[assignment]
+            agentmemory_runtime.api_health_payload = original_api_health_payload  # type: ignore[assignment]
+
+        self.assertEqual(payload["api_runtime"]["status"], "running_untracked")
+        self.assertEqual(payload["api_runtime"]["listener_pid"], 222)
+        self.assertTrue(payload["api_runtime"]["listener_runtime_matches_current"])
+
 
 if __name__ == "__main__":
     unittest.main()

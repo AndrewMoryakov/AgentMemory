@@ -154,6 +154,138 @@ class AgentMemoryCoreTests(unittest.TestCase):
         self.assertEqual(updated["runtime"]["api_port"], 8766)
         self.assertIn("Port 8765 is busy; using 8766 instead", buffer.getvalue())
 
+    def test_start_api_process_adopts_matching_runtime_listener_without_pid_file(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        base = Path(temp_dir.name)
+        original_api_pid_file = agentmemory.API_PID_FILE
+        original_managed_api_listener_pid = agentmemory.managed_api_listener_pid
+        original_read_api_pid = agentmemory.read_api_pid
+        original_process_exists = agentmemory.process_exists
+        original_api_is_ready = agentmemory.api_is_ready
+        original_write_api_state = agentmemory.write_api_state
+        captured: dict[str, object] = {}
+        try:
+            agentmemory.API_PID_FILE = base / "agentmemory-api.pid"
+            agentmemory.read_api_pid = lambda: None  # type: ignore[assignment]
+            agentmemory.process_exists = lambda pid: False  # type: ignore[assignment]
+            agentmemory.api_is_ready = lambda host, port, timeout_seconds=1.0: False  # type: ignore[assignment]
+            agentmemory.managed_api_listener_pid = lambda host, port: 222  # type: ignore[assignment]
+            agentmemory.write_api_state = lambda **kwargs: captured.update(kwargs)  # type: ignore[assignment]
+
+            ok_result, message = agentmemory.start_api_process("127.0.0.1", 8765)
+            written_pid = (base / "agentmemory-api.pid").read_text(encoding="ascii")
+        finally:
+            agentmemory.API_PID_FILE = original_api_pid_file
+            agentmemory.managed_api_listener_pid = original_managed_api_listener_pid  # type: ignore[assignment]
+            agentmemory.read_api_pid = original_read_api_pid  # type: ignore[assignment]
+            agentmemory.process_exists = original_process_exists  # type: ignore[assignment]
+            agentmemory.api_is_ready = original_api_is_ready  # type: ignore[assignment]
+            agentmemory.write_api_state = original_write_api_state  # type: ignore[assignment]
+            temp_dir.cleanup()
+
+        self.assertTrue(ok_result)
+        self.assertIn("adopted existing runtime listener", message)
+        self.assertEqual(written_pid, "222")
+        self.assertEqual(captured["pid"], 222)
+
+    def test_stop_api_process_stops_matching_runtime_listener_without_pid_file(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        base = Path(temp_dir.name)
+        original_api_pid_file = agentmemory.API_PID_FILE
+        original_remove_api_state = agentmemory.remove_api_state
+        original_managed_api_listener_pid = agentmemory.managed_api_listener_pid
+        original_read_api_pid = agentmemory.read_api_pid
+        original_process_exists = agentmemory.process_exists
+        original_is_windows = agentmemory.is_windows
+        original_os_kill = agentmemory.os.kill
+        killed: dict[str, object] = {}
+        try:
+            agentmemory.API_PID_FILE = base / "agentmemory-api.pid"
+            agentmemory.read_api_pid = lambda: None  # type: ignore[assignment]
+            agentmemory.managed_api_listener_pid = lambda host, port: 333  # type: ignore[assignment]
+            agentmemory.process_exists = lambda pid: pid == 333  # type: ignore[assignment]
+            agentmemory.is_windows = lambda: False  # type: ignore[assignment]
+            agentmemory.os.kill = lambda pid, sig: killed.update({"pid": pid, "sig": sig})  # type: ignore[assignment]
+            agentmemory.remove_api_state = lambda: None  # type: ignore[assignment]
+
+            ok_result, message = agentmemory.stop_api_process()
+        finally:
+            agentmemory.API_PID_FILE = original_api_pid_file
+            agentmemory.remove_api_state = original_remove_api_state  # type: ignore[assignment]
+            agentmemory.managed_api_listener_pid = original_managed_api_listener_pid  # type: ignore[assignment]
+            agentmemory.read_api_pid = original_read_api_pid  # type: ignore[assignment]
+            agentmemory.process_exists = original_process_exists  # type: ignore[assignment]
+            agentmemory.is_windows = original_is_windows  # type: ignore[assignment]
+            agentmemory.os.kill = original_os_kill  # type: ignore[assignment]
+            temp_dir.cleanup()
+
+        self.assertTrue(ok_result)
+        self.assertEqual(killed["pid"], 333)
+        self.assertIn("Stopped AgentMemory API process 333", message)
+
+    def test_start_api_process_waits_for_listener_pid_and_records_real_listener(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        base = Path(temp_dir.name)
+        original_api_pid_file = agentmemory.API_PID_FILE
+        original_api_log_file = agentmemory.API_LOG_FILE
+        original_api_err_file = agentmemory.API_ERR_FILE
+        original_subprocess_popen = agentmemory.subprocess.Popen
+        original_listening_pid_for_api_port = agentmemory.listening_pid_for_api_port
+        original_api_is_ready = agentmemory.api_is_ready
+        original_read_api_pid = agentmemory.read_api_pid
+        original_process_exists = agentmemory.process_exists
+        original_managed_api_listener_pid = agentmemory.managed_api_listener_pid
+        original_write_api_state = agentmemory.write_api_state
+        original_time_sleep = agentmemory.time.sleep
+        captured: dict[str, object] = {}
+
+        class FakeProcess:
+            pid = 111
+
+            def poll(self):
+                return 0
+
+        ready_checks = {"count": 0}
+
+        try:
+            agentmemory.API_PID_FILE = base / "agentmemory-api.pid"
+            agentmemory.API_LOG_FILE = base / "agentmemory-api.log"
+            agentmemory.API_ERR_FILE = base / "agentmemory-api.err.log"
+            agentmemory.read_api_pid = lambda: None  # type: ignore[assignment]
+            agentmemory.process_exists = lambda pid: False  # type: ignore[assignment]
+            agentmemory.managed_api_listener_pid = lambda host, port: None  # type: ignore[assignment]
+            agentmemory.subprocess.Popen = lambda *args, **kwargs: FakeProcess()  # type: ignore[assignment]
+            agentmemory.listening_pid_for_api_port = lambda host, port: 222  # type: ignore[assignment]
+
+            def fake_api_is_ready(host: str, port: int, timeout_seconds: float = 1.0) -> bool:
+                ready_checks["count"] += 1
+                return ready_checks["count"] >= 3
+
+            agentmemory.api_is_ready = fake_api_is_ready  # type: ignore[assignment]
+            agentmemory.write_api_state = lambda **kwargs: captured.update(kwargs)  # type: ignore[assignment]
+            agentmemory.time.sleep = lambda seconds: None  # type: ignore[assignment]
+
+            ok_result, message = agentmemory.start_api_process("127.0.0.1", 8765)
+            written_pid = (base / "agentmemory-api.pid").read_text(encoding="ascii")
+        finally:
+            agentmemory.API_PID_FILE = original_api_pid_file
+            agentmemory.API_LOG_FILE = original_api_log_file
+            agentmemory.API_ERR_FILE = original_api_err_file
+            agentmemory.subprocess.Popen = original_subprocess_popen  # type: ignore[assignment]
+            agentmemory.listening_pid_for_api_port = original_listening_pid_for_api_port  # type: ignore[assignment]
+            agentmemory.api_is_ready = original_api_is_ready  # type: ignore[assignment]
+            agentmemory.read_api_pid = original_read_api_pid  # type: ignore[assignment]
+            agentmemory.process_exists = original_process_exists  # type: ignore[assignment]
+            agentmemory.managed_api_listener_pid = original_managed_api_listener_pid  # type: ignore[assignment]
+            agentmemory.write_api_state = original_write_api_state  # type: ignore[assignment]
+            agentmemory.time.sleep = original_time_sleep  # type: ignore[assignment]
+            temp_dir.cleanup()
+
+        self.assertTrue(ok_result)
+        self.assertIn("PID 222", message)
+        self.assertEqual(written_pid, "222")
+        self.assertEqual(captured["pid"], 222)
+
     def test_profile_commands_create_list_and_use_profiles(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
         base = Path(temp_dir.name)
@@ -320,6 +452,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
         self.assertIn("Transport mode: owner_process_proxy", output)
         self.assertIn("Operational guidance:", output)
         self.assertIn("requires scope", output)
+        self.assertIn("Env file: not present at fake.env", output)
 
     def test_doctor_clients_json_includes_provider_guidance(self) -> None:
         original_run_clients_helper = agentmemory.run_clients_helper

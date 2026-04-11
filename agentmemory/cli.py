@@ -28,15 +28,18 @@ from agentmemory.runtime.config import (
     BASE_DIR,
     CONFIG_PATH,
     ENV_PATH,
+    api_health_payload,
     create_profile,
     current_profile_name,
     default_runtime_config,
     get_provider,
+    listening_pid_for_api_port,
     list_profile_names,
     load_runtime_config_with_source,
     provider_class,
     provider_registry,
     remove_api_state,
+    runtime_identity,
     runtime_info,
     set_active_profile,
     write_api_state,
@@ -448,11 +451,32 @@ def process_exists(pid: int | None) -> bool:
         return False
 
 
+def managed_api_listener_pid(host: str, port: int) -> int | None:
+    listener_pid = listening_pid_for_api_port(host, port)
+    if listener_pid is None:
+        return None
+    payload = api_health_payload(host, port, timeout_seconds=1.0)
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        return None
+    listener_runtime = payload.get("runtime_identity")
+    if not isinstance(listener_runtime, dict):
+        return None
+    if listener_runtime.get("runtime_id") != runtime_identity().get("runtime_id"):
+        return None
+    return listener_pid
+
+
 def start_api_process(host: str, port: int) -> tuple[bool, str]:
     API_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     existing_pid = read_api_pid()
     if existing_pid and process_exists(existing_pid) and api_is_ready(host, port, timeout_seconds=1.0):
         return True, f'AgentMemory API is already running with PID {existing_pid} on {api_health_url(host, port).removesuffix("/health")}'
+
+    adopted_pid = managed_api_listener_pid(host, port)
+    if adopted_pid is not None:
+        API_PID_FILE.write_text(str(adopted_pid), encoding='ascii')
+        write_api_state(pid=adopted_pid, host=host, port=port)
+        return True, f'AgentMemory API is already running with PID {adopted_pid} on {api_health_url(host, port).removesuffix("/health")} (adopted existing runtime listener).'
 
     if existing_pid and process_exists(existing_pid):
         stop_api_process()
@@ -481,15 +505,13 @@ def start_api_process(host: str, port: int) -> tuple[bool, str]:
         stdout_handle.close()
         stderr_handle.close()
 
-    API_PID_FILE.write_text(str(process.pid), encoding='ascii')
-
     for _ in range(40):
         time.sleep(0.25)
         if api_is_ready(host, port, timeout_seconds=1.0):
-            write_api_state(pid=process.pid, host=host, port=port)
-            return True, f'AgentMemory API started with PID {process.pid} on http://{host}:{port}. Logs: {API_LOG_FILE}, {API_ERR_FILE}'
-        if process.poll() is not None:
-            break
+            listener_pid = listening_pid_for_api_port(host, port) or process.pid
+            API_PID_FILE.write_text(str(listener_pid), encoding='ascii')
+            write_api_state(pid=listener_pid, host=host, port=port)
+            return True, f'AgentMemory API started with PID {listener_pid} on http://{host}:{port}. Logs: {API_LOG_FILE}, {API_ERR_FILE}'
 
     API_PID_FILE.unlink(missing_ok=True)
     remove_api_state()
@@ -498,6 +520,8 @@ def start_api_process(host: str, port: int) -> tuple[bool, str]:
         error_text = API_ERR_FILE.read_text(encoding='utf-8', errors='replace').strip()
     if not error_text and API_LOG_FILE.exists():
         error_text = API_LOG_FILE.read_text(encoding='utf-8', errors='replace').strip()
+    if not error_text and process.poll() is not None:
+        error_text = f'API launcher process exited before readiness (pid {process.pid}).'
     details = f' {error_text}' if error_text else ''
     return False, f'AgentMemory API failed to start on http://{host}:{port}.{details}'
 
@@ -505,8 +529,12 @@ def start_api_process(host: str, port: int) -> tuple[bool, str]:
 def stop_api_process() -> tuple[bool, str]:
     pid = read_api_pid()
     if not pid:
-        remove_api_state()
-        return True, 'AgentMemory API PID file not found.'
+        adopted_pid = managed_api_listener_pid(load_runtime_config_with_source()[0]["runtime"].get("api_host", "127.0.0.1"), load_runtime_config_with_source()[0]["runtime"].get("api_port", 8765))
+        if adopted_pid is None:
+            remove_api_state()
+            return True, 'AgentMemory API PID file not found.'
+        pid = adopted_pid
+        API_PID_FILE.write_text(str(pid), encoding='ascii')
     if not process_exists(pid):
         API_PID_FILE.unlink(missing_ok=True)
         remove_api_state()
@@ -711,7 +739,7 @@ def command_doctor(_: argparse.Namespace) -> int:
     if ENV_PATH.exists():
         print(ok(f'Env file: {ENV_PATH}'))
     else:
-        print(warn(f'Env file missing: {ENV_PATH}'))
+        print(info(f'Env file: not present at {ENV_PATH}'))
     print(ok(f'Virtual environment: {VENV_PYTHON}' if VENV_PYTHON.exists() else f'Virtual environment missing: {VENV_PYTHON}'))
 
     print(info(f"Active provider: {info_payload['provider']}"))

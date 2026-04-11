@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import subprocess
+import urllib.request
 from copy import deepcopy
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -420,6 +421,15 @@ def listening_pid_for_api_port(host: str, port: int) -> int | None:
         return None
 
 
+def api_health_payload(host: str, port: int, *, timeout_seconds: float = 2.0) -> dict[str, Any] | None:
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/health", timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
 def read_api_state() -> dict[str, Any] | None:
     if not API_STATE_FILE.exists():
         return None
@@ -455,17 +465,53 @@ def api_runtime_diagnostics() -> dict[str, Any]:
     port = current_api_port()
     pid = read_api_pid()
     state = read_api_state()
+    current_runtime_id = runtime_identity()["runtime_id"]
+
+    if os.environ.get("AGENTMEMORY_OWNER_PROCESS") == "1":
+        state_pid = state.get("pid") if isinstance(state, dict) else None
+        state_runtime_id = state.get("runtime_id") if isinstance(state, dict) else None
+        return {
+            "status": "running",
+            "expected_url": f"http://{host}:{port}",
+            "pid_file": str(API_PID_FILE),
+            "state_file": str(API_STATE_FILE),
+            "recorded_pid": pid,
+            "recorded_pid_running": process_exists(pid),
+            "listener_pid": os.getpid(),
+            "listener_healthy": True,
+            "listener_runtime_id": current_runtime_id,
+            "listener_runtime_matches_current": True,
+            "recorded_pid_owns_listener": pid == os.getpid() if pid is not None else False,
+            "recorded_state": state,
+            "recorded_state_pid_matches": state_pid == pid if state is not None else None,
+            "recorded_runtime_matches_current": state_runtime_id == current_runtime_id if state is not None else False,
+            "port_available": False,
+        }
+
     process_running = process_exists(pid)
     port_available = can_bind_api_port(host, port)
     listener_pid = listening_pid_for_api_port(host, port)
     recorded_pid_owns_listener = bool(pid and listener_pid and pid == listener_pid)
-    current_runtime_id = runtime_identity()["runtime_id"]
     state_runtime_id = state.get("runtime_id") if isinstance(state, dict) else None
     state_pid = state.get("pid") if isinstance(state, dict) else None
     matches_current_runtime = bool(state_runtime_id and state_runtime_id == current_runtime_id)
+    probe_listener_health = os.environ.get("AGENTMEMORY_OWNER_PROCESS") != "1"
+    listener_health = (
+        api_health_payload(host, port, timeout_seconds=1.0)
+        if listener_pid is not None and probe_listener_health
+        else None
+    )
+    listener_runtime_id = None
+    if isinstance(listener_health, dict):
+        listener_runtime = listener_health.get("runtime_identity")
+        if isinstance(listener_runtime, dict):
+            listener_runtime_id = listener_runtime.get("runtime_id")
+    listener_matches_current_runtime = bool(listener_runtime_id and listener_runtime_id == current_runtime_id)
 
     if process_running and recorded_pid_owns_listener and matches_current_runtime:
         status = "running"
+    elif listener_matches_current_runtime and listener_pid is not None:
+        status = "running_untracked"
     elif process_running and listener_pid is not None and not recorded_pid_owns_listener:
         status = "foreign_listener_conflict"
     elif process_running and port_available:
@@ -485,6 +531,9 @@ def api_runtime_diagnostics() -> dict[str, Any]:
         "recorded_pid": pid,
         "recorded_pid_running": process_running,
         "listener_pid": listener_pid,
+        "listener_healthy": bool(listener_health and listener_health.get("ok") is True),
+        "listener_runtime_id": listener_runtime_id,
+        "listener_runtime_matches_current": listener_matches_current_runtime,
         "recorded_pid_owns_listener": recorded_pid_owns_listener,
         "recorded_state": state,
         "recorded_state_pid_matches": state_pid == pid if state is not None else None,

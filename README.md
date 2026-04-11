@@ -32,6 +32,7 @@ Start here if you want the fuller explanation:
 
 - [Why AgentMemory Exists](docs/WHY_AGENTMEMORY.md)
 - [Mem0 vs AgentMemory](docs/MEM0_VS_AGENTMEMORY.md)
+- [What AgentMemory Actually Adds](docs/WHAT_AGENTMEMORY_ACTUALLY_ADDS.md)
 - [Start Here](docs/START_HERE.md)
 
 ## When You Probably Do Not Need AgentMemory
@@ -73,10 +74,11 @@ cd AgentMemory
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e .
-agentmemory configure --provider localjson
-agentmemory doctor
-agentmemory start-api
-python .\examples\http_python_roundtrip.py
+.\.venv\Scripts\agentmemory.exe configure --provider localjson
+.\.venv\Scripts\agentmemory.exe doctor
+.\.venv\Scripts\agentmemory.exe start-api
+.\.venv\Scripts\python.exe .\examples\http_python_roundtrip.py
+.\.venv\Scripts\python.exe -m agentmemory.ops_cli list --user-id examples-http-roundtrip --limit 5
 ```
 
 This path proves:
@@ -85,6 +87,19 @@ This path proves:
 - the local runtime starts
 - the HTTP API works
 - one client surface can read and write memory immediately
+
+What success looks like:
+
+- `doctor` reports no blocking errors
+- `start-api` prints the local API URL
+- `http_python_roundtrip.py` prints a created memory plus list and search results
+- the final `list` command shows at least one memory for `examples-http-roundtrip`
+
+When you are done:
+
+```powershell
+.\.venv\Scripts\agentmemory.exe stop-api
+```
 
 ### Local Runtime Files
 
@@ -100,13 +115,21 @@ The repository only ships safe templates such as `.env.example`.
 
 ### Main Semantic Backend
 
+Only switch to `mem0` after the `localjson` path above succeeds.
+
 If you want the main semantic path, switch to `mem0`:
 
 ```powershell
-agentmemory configure --provider mem0 --openrouter-api-key "your-openrouter-key"
-agentmemory doctor
-agentmemory start-api
+.\.venv\Scripts\agentmemory.exe configure --provider mem0 --openrouter-api-key "your-openrouter-key"
+.\.venv\Scripts\agentmemory.exe doctor
+.\.venv\Scripts\agentmemory.exe start-api
 ```
+
+What success looks like:
+
+- `doctor` confirms the configured runtime is usable
+- `start-api` starts cleanly with the configured provider
+- you can rerun `.\.venv\Scripts\python.exe .\examples\http_python_roundtrip.py`
 
 ### macOS / Linux
 
@@ -116,11 +139,46 @@ cd AgentMemory
 python3 -m venv .venv
 ./.venv/bin/python -m pip install --upgrade pip
 ./.venv/bin/python -m pip install -e .
-agentmemory configure --provider localjson
-agentmemory doctor
-agentmemory start-api
-python ./examples/http_python_roundtrip.py
+./.venv/bin/agentmemory configure --provider localjson
+./.venv/bin/agentmemory doctor
+./.venv/bin/agentmemory start-api
+./.venv/bin/python ./examples/http_python_roundtrip.py
+./.venv/bin/python -m agentmemory.ops_cli list --user-id examples-http-roundtrip --limit 5
 ```
+
+What success looks like:
+
+- `doctor` reports no blocking errors
+- `start-api` prints the local API URL
+- the roundtrip script prints a created memory plus list and search results
+- the final `list` command shows at least one memory for `examples-http-roundtrip`
+
+When you are done:
+
+```sh
+./.venv/bin/agentmemory stop-api
+```
+
+### Shared Runtime Demo
+
+The canonical onboarding story is:
+
+- write memory through the local HTTP API
+- read the same memory back through the CLI
+- confirm one shared runtime is serving both client surfaces
+
+See:
+
+- [Shared Runtime Demo](examples/shared-runtime-demo.md)
+
+### Quick Troubleshooting
+
+If the quickstart does not work immediately, check these first:
+
+- If `agentmemory` is not found, use the explicit `.venv` command paths shown above instead of relying on shell activation.
+- If the API fails to start, rerun `.\.venv\Scripts\agentmemory.exe doctor` and read the blocking errors first.
+- If the API port is already busy, `start-api` should choose a free port; rerun the roundtrip script only after the printed API URL appears.
+- If the `mem0` path fails, go back to `localjson` first. The first evaluation path should not depend on external API keys or semantic-provider setup.
 
 ## Architecture Snapshot
 
@@ -170,16 +228,16 @@ This is one of the clearest examples of why a memory runtime layer can be useful
 ## Main Commands
 
 ```powershell
-agentmemory --help
-agentmemory doctor
-agentmemory configure --provider localjson
-agentmemory configure --provider mem0 --openrouter-api-key "your-openrouter-key"
-agentmemory start-api
-agentmemory stop-api
-agentmemory mcp-smoke
-agentmemory connect-clients
-agentmemory status-clients --compact
-agentmemory doctor-clients --compact
+.\.venv\Scripts\agentmemory.exe --help
+.\.venv\Scripts\agentmemory.exe doctor
+.\.venv\Scripts\agentmemory.exe configure --provider localjson
+.\.venv\Scripts\agentmemory.exe configure --provider mem0 --openrouter-api-key "your-openrouter-key"
+.\.venv\Scripts\agentmemory.exe start-api
+.\.venv\Scripts\agentmemory.exe stop-api
+.\.venv\Scripts\agentmemory.exe mcp-smoke
+.\.venv\Scripts\agentmemory.exe connect-clients
+.\.venv\Scripts\agentmemory.exe status-clients --compact
+.\.venv\Scripts\agentmemory.exe doctor-clients --compact
 ```
 
 ## Browser UI
@@ -229,6 +287,7 @@ Use `localjson` when you want:
 - [Start Here](docs/START_HERE.md)
 - [Why AgentMemory Exists](docs/WHY_AGENTMEMORY.md)
 - [Mem0 vs AgentMemory](docs/MEM0_VS_AGENTMEMORY.md)
+- [What AgentMemory Actually Adds](docs/WHAT_AGENTMEMORY_ACTUALLY_ADDS.md)
 - [Use Cases](docs/USE_CASES.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Positioning Assets](docs/POSITIONING.md)
@@ -250,7 +309,8 @@ Useful local checks:
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe -m compileall agentmemory tests scripts/mcp-smoke-test.py
-agentmemory mcp-smoke
+.\.venv\Scripts\agentmemory.exe mcp-smoke
+.\.venv\Scripts\python.exe -m agentmemory.ops_cli list-scopes --limit 20
 ```
 
 ## Provider Certification
@@ -265,8 +325,8 @@ Useful references:
 Quick helper commands:
 
 ```powershell
-agentmemory provider-certify --list
-agentmemory provider-certify --list --json
-agentmemory provider-certify localjson
-agentmemory provider-certify localjson --json --run-tests --summary-only
+.\.venv\Scripts\provider-certify.exe --list
+.\.venv\Scripts\provider-certify.exe --list --json
+.\.venv\Scripts\provider-certify.exe localjson
+.\.venv\Scripts\provider-certify.exe localjson --json --run-tests --summary-only
 ```
