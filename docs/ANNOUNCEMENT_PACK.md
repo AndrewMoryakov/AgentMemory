@@ -43,6 +43,24 @@ agentmemory start-api
 agentmemory mcp-smoke
 ```
 
+## What Changed Since v0.1.0
+
+`v0.1.1` is a stabilization release for the first public alpha.
+
+It does not change the core idea of AgentMemory. It makes the runtime more usable and more trustworthy in real local workflows.
+
+Main improvements:
+
+- scope discovery now works cleanly through `memory_list_scopes`, especially for scope-required providers such as `mem0`
+- local API startup now auto-selects a free port instead of failing awkwardly on port conflicts
+- runtime diagnostics are much stronger and can distinguish stale process records from foreign listener conflicts
+- runtime profiles now make it possible to separate environments such as `default`, `staging`, and `demo`
+- provider contract `v2` metadata now gives future providers a more formal integration target
+
+Short version:
+
+`v0.1.1` makes AgentMemory less fragile operationally and more ready for future provider expansion.
+
 ## GitHub Release Version
 
 `AgentMemory` is a shared local memory runtime for AI clients and agents. It exposes one stable surface through CLI, HTTP API, and MCP, and sits above pluggable backend providers such as `mem0`.

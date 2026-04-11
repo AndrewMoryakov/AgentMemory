@@ -6,6 +6,10 @@ The format is intentionally simple during public alpha.
 
 ## [Unreleased]
 
+- no unreleased entries yet
+
+## [0.1.1] - 2026-04-11
+
 ### Added
 
 - first-class `list_scopes` support across runtime, API, CLI, MCP, and admin surfaces
