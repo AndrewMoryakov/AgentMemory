@@ -11,6 +11,7 @@ from agentmemory.providers.base import (
     BaseMemoryProvider,
     DeleteResult,
     MemoryNotFoundError,
+    ProviderContract,
     MemoryRecord,
     ProviderCapabilityError,
     ProviderCapabilities,
@@ -75,6 +76,21 @@ class LocalJsonProvider(BaseMemoryProvider):
 
     def runtime_policy(self) -> ProviderRuntimePolicy:
         return {"transport_mode": "direct"}
+
+    def provider_contract(self) -> ProviderContract:
+        return {
+            "contract_version": "v2",
+            "record_shape": "memory_record_v1",
+            "scope_kinds": ["user", "agent", "run"],
+            "consistency": "immediate",
+            "write_visibility": "immediate",
+            "update_semantics": "replace",
+            "delete_semantics": "hard_delete",
+            "filter_semantics": "record_and_metadata",
+            "metadata_value_policy": "json_object",
+            "supports_background_ingest": False,
+            "supports_remote_transport": False,
+        }
 
     @property
     def storage_path(self) -> Path:

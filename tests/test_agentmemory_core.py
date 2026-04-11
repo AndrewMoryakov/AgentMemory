@@ -154,6 +154,42 @@ class AgentMemoryCoreTests(unittest.TestCase):
         self.assertEqual(updated["runtime"]["api_port"], 8766)
         self.assertIn("Port 8765 is busy; using 8766 instead", buffer.getvalue())
 
+    def test_profile_commands_create_list_and_use_profiles(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        base = Path(temp_dir.name)
+        original_config_path = agentmemory_runtime.CONFIG_PATH
+        original_env_path = agentmemory_runtime.ENV_PATH
+        original_agentmemory_config_path = agentmemory.CONFIG_PATH
+        original_agentmemory_env_path = agentmemory.ENV_PATH
+        original_stdout = agentmemory.sys.stdout
+        buffer = StringIO()
+        try:
+            agentmemory_runtime.CONFIG_PATH = base / "agentmemory.config.json"
+            agentmemory_runtime.ENV_PATH = base / ".env"
+            agentmemory.CONFIG_PATH = agentmemory_runtime.CONFIG_PATH
+            agentmemory.ENV_PATH = agentmemory_runtime.ENV_PATH
+            agentmemory_runtime.write_runtime_config(agentmemory_runtime.default_runtime_config())
+
+            parser = agentmemory.build_parser()
+            rc_create = agentmemory.command_profile_create(parser.parse_args(["profile-create", "staging"]))
+            agentmemory.sys.stdout = buffer
+            rc_use = agentmemory.command_profile_use(parser.parse_args(["profile-use", "staging"]))
+            rc_list = agentmemory.command_profile_list(parser.parse_args(["profile-list"]))
+        finally:
+            agentmemory_runtime.CONFIG_PATH = original_config_path
+            agentmemory_runtime.ENV_PATH = original_env_path
+            agentmemory.CONFIG_PATH = original_agentmemory_config_path
+            agentmemory.ENV_PATH = original_agentmemory_env_path
+            agentmemory.sys.stdout = original_stdout
+            agentmemory_runtime.clear_caches()
+            temp_dir.cleanup()
+
+        output = buffer.getvalue()
+        self.assertEqual(rc_create, 0)
+        self.assertEqual(rc_use, 0)
+        self.assertEqual(rc_list, 0)
+        self.assertIn("* staging", output)
+
     def test_provider_certify_subcommand_lists_targets_as_json(self) -> None:
         parser = agentmemory.build_parser()
         args = parser.parse_args(["provider-certify", "--list", "--json"])

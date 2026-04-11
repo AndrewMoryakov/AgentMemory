@@ -24,15 +24,22 @@ from agentmemory.interactive import (
 )
 from agentmemory.platform import is_windows, launcher_command, launcher_path, shell_command, venv_python_path
 from agentmemory.runtime.config import (
+    API_PID_FILE,
     BASE_DIR,
     CONFIG_PATH,
     ENV_PATH,
+    create_profile,
+    current_profile_name,
     default_runtime_config,
     get_provider,
+    list_profile_names,
     load_runtime_config_with_source,
     provider_class,
     provider_registry,
+    remove_api_state,
     runtime_info,
+    set_active_profile,
+    write_api_state,
     write_runtime_config,
 )
 from agentmemory.runtime.transport import capability_summary
@@ -49,7 +56,6 @@ GEMINI_SNIPPET = BASE_DIR / 'snippets' / 'gemini-settings-snippet.json'
 CLIENTS_MODULE = 'agentmemory.clients'
 API_MODULE = 'agentmemory.api'
 OPS_CLI_MODULE = 'agentmemory.ops_cli'
-API_PID_FILE = BASE_DIR / 'data' / 'agentmemory-api.pid'
 API_LOG_FILE = BASE_DIR / 'data' / 'agentmemory-api.log'
 API_ERR_FILE = BASE_DIR / 'data' / 'agentmemory-api.err.log'
 PLACEHOLDER_KEYS = {'paste-your-openrouter-key-here', 'YOUR_OPENROUTER_API_KEY'}
@@ -480,11 +486,13 @@ def start_api_process(host: str, port: int) -> tuple[bool, str]:
     for _ in range(40):
         time.sleep(0.25)
         if api_is_ready(host, port, timeout_seconds=1.0):
+            write_api_state(pid=process.pid, host=host, port=port)
             return True, f'AgentMemory API started with PID {process.pid} on http://{host}:{port}. Logs: {API_LOG_FILE}, {API_ERR_FILE}'
         if process.poll() is not None:
             break
 
     API_PID_FILE.unlink(missing_ok=True)
+    remove_api_state()
     error_text = ''
     if API_ERR_FILE.exists():
         error_text = API_ERR_FILE.read_text(encoding='utf-8', errors='replace').strip()
@@ -497,9 +505,11 @@ def start_api_process(host: str, port: int) -> tuple[bool, str]:
 def stop_api_process() -> tuple[bool, str]:
     pid = read_api_pid()
     if not pid:
+        remove_api_state()
         return True, 'AgentMemory API PID file not found.'
     if not process_exists(pid):
         API_PID_FILE.unlink(missing_ok=True)
+        remove_api_state()
         return True, 'AgentMemory API process is not running.'
 
     if is_windows():
@@ -522,6 +532,7 @@ def stop_api_process() -> tuple[bool, str]:
             success = False
             details = str(exc)
     API_PID_FILE.unlink(missing_ok=True)
+    remove_api_state()
     if success:
         return True, f'Stopped AgentMemory API process {pid}'
     return False, details
@@ -543,6 +554,30 @@ def persist_runtime_api_port(port: int) -> None:
         return
     runtime['api_port'] = port
     write_config(config)
+
+
+def command_profile_list(_: argparse.Namespace) -> int:
+    heading('AgentMemory Profiles')
+    active = current_profile_name()
+    for profile_name in list_profile_names():
+        marker = '*' if profile_name == active else ' '
+        print(f'{marker} {profile_name}')
+    return 0
+
+
+def command_profile_create(args: argparse.Namespace) -> int:
+    heading('AgentMemory Profiles')
+    profile = create_profile(args.name, copy_from=args.copy_from)
+    print(ok(f"Created profile '{args.name}'"))
+    print(json.dumps(profile, ensure_ascii=True, indent=2))
+    return 0
+
+
+def command_profile_use(args: argparse.Namespace) -> int:
+    heading('AgentMemory Profiles')
+    set_active_profile(args.name)
+    print(ok(f"Active profile: {args.name}"))
+    return 0
 
 
 def command_install(args: argparse.Namespace) -> int:
@@ -680,9 +715,14 @@ def command_doctor(_: argparse.Namespace) -> int:
     print(ok(f'Virtual environment: {VENV_PYTHON}' if VENV_PYTHON.exists() else f'Virtual environment missing: {VENV_PYTHON}'))
 
     print(info(f"Active provider: {info_payload['provider']}"))
+    print(info(f"Active profile: {info_payload.get('active_profile', 'default')}"))
+    print(info(f"Runtime id: {info_payload.get('runtime_identity', {}).get('runtime_id', 'unknown')}"))
+    print(info(f"Config version: {info_payload.get('runtime_identity', {}).get('config_version', 'unknown')}"))
     print(info(f'Config source: {config_source}'))
     print(info(f"API host: {info_payload['api_host']}"))
     print(info(f"API port: {info_payload['api_port']}"))
+    print(info(f"API status: {info_payload.get('api_runtime', {}).get('status', 'unknown')}"))
+    print(info(f"Recorded API PID: {info_payload.get('api_runtime', {}).get('recorded_pid', 'none')}"))
     capabilities = capability_summary(info_payload.get('capabilities', {}))
     print(info(f"Search mode: {capabilities['search_mode']}"))
     print(info(f"Supports filters: {capabilities['supports_filters']}"))
@@ -692,6 +732,7 @@ def command_doctor(_: argparse.Namespace) -> int:
     print(info(f"List requires scope: {capabilities['requires_scope_for_list']}"))
     print(info(f"Owner-process mode: {capabilities['supports_owner_process_mode']}"))
     print(info(f"Transport mode: {info_payload.get('runtime_policy', {}).get('transport_mode', 'direct')}"))
+    print(info(f"Provider contract: {info_payload.get('provider_contract', {}).get('contract_version', 'unknown')}"))
     print_provider_guidance(
         provider_guidance(
             info_payload['provider'],
@@ -895,6 +936,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     help_parser = subparsers.add_parser('help', help='Show interactive shell help and slash commands.')
     help_parser.set_defaults(func=command_help)
+
+    profile_list_parser = subparsers.add_parser('profile-list', help='List known AgentMemory runtime profiles.')
+    profile_list_parser.set_defaults(func=command_profile_list)
+
+    profile_create_parser = subparsers.add_parser('profile-create', help='Create a new AgentMemory runtime profile.')
+    profile_create_parser.add_argument('name')
+    profile_create_parser.add_argument('--copy-from', help='Clone settings from an existing profile.')
+    profile_create_parser.set_defaults(func=command_profile_create)
+
+    profile_use_parser = subparsers.add_parser('profile-use', help='Switch the active AgentMemory runtime profile.')
+    profile_use_parser.add_argument('name')
+    profile_use_parser.set_defaults(func=command_profile_use)
 
     list_scopes_parser = subparsers.add_parser('list-scopes', help='List known user, agent, and run scopes for the active provider.')
     list_scopes_parser.add_argument('--limit', type=int, default=200)

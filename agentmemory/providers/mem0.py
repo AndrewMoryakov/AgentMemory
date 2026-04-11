@@ -24,6 +24,7 @@ from agentmemory.providers.base import (
     MemoryRecord,
     ProviderCapabilityError,
     ProviderCapabilities,
+    ProviderContract,
     ProviderConfigurationError,
     ProviderRuntimePolicy,
     ProviderScopeRequiredError,
@@ -158,6 +159,21 @@ class Mem0Provider(BaseMemoryProvider):
 
     def runtime_policy(self) -> ProviderRuntimePolicy:
         return {"transport_mode": "owner_process_proxy"}
+
+    def provider_contract(self) -> ProviderContract:
+        return {
+            "contract_version": "v2",
+            "record_shape": "memory_record_v1",
+            "scope_kinds": ["user", "agent", "run"],
+            "consistency": "immediate",
+            "write_visibility": "owner_process_proxy",
+            "update_semantics": "replace",
+            "delete_semantics": "provider_defined",
+            "filter_semantics": "record_and_metadata",
+            "metadata_value_policy": "json_object",
+            "supports_background_ingest": False,
+            "supports_remote_transport": False,
+        }
 
     def clear_caches(self) -> None:
         self._get_openrouter_api_key.cache_clear()

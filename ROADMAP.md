@@ -38,6 +38,61 @@ This closes the biggest architecture gap from the earlier alpha state.
 
 The next major work is no longer basic standardization. It is productization and surface expansion on top of that baseline.
 
+## Immediate Runtime Hardening
+
+The next immediate hardening pass should focus on three operational gaps that are now worth treating as first-class product work.
+
+### 1. Profiles and Environments
+
+AgentMemory needs first-class runtime profiles so one repository can safely host multiple environments such as:
+
+- `default`
+- `staging`
+- `demo`
+- `test`
+
+This matters because one shared-memory runtime quickly becomes operationally messy without explicit environment separation.
+
+Expected direction:
+
+- multiple named profiles in runtime config
+- one active profile at a time
+- profile-aware runtime metadata and diagnostics
+- profile-specific runtime directories and API settings
+
+### 2. Stronger Runtime Identity and Port / Process Diagnostics
+
+AgentMemory already has local API startup and health checks, but it needs stronger diagnostics around:
+
+- which runtime instance is active
+- which profile owns the current API
+- whether the recorded PID still belongs to the current runtime
+- whether the configured port is free, occupied by this runtime, or occupied by something else
+
+This matters because local-first products fail in confusing ways when process state and port ownership are ambiguous.
+
+Expected direction:
+
+- stable runtime identity in diagnostics
+- recorded API process metadata
+- better distinction between stale PID files, stale state, and foreign port occupancy
+- clearer doctor/runtime output for operators
+
+### 3. More Formal Provider Contract V2
+
+Provider Contract V1 made the core runtime possible.
+
+The next step is to keep the existing V1 compatibility surface while adding a more formal V2 provider contract for future integrations.
+
+This matters because future providers such as graph, hosted, or async-oriented systems will need stronger semantics than a flat capabilities map alone.
+
+Expected direction:
+
+- explicit provider contract version metadata
+- formal statements about consistency and write visibility
+- formal statements about update/delete/filter semantics
+- a clearer base for future providers such as `zep`, `graphiti`, `hindsight`, `cognee`, and others
+
 ## Provider Architecture Readiness
 
 The current architecture is directionally ready for more providers.

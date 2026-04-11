@@ -53,9 +53,12 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         payload = agentmemory_runtime.runtime_info()
 
         self.assertEqual(payload["provider"], "mem0")
+        self.assertEqual(payload["active_profile"], "default")
         self.assertEqual(payload["config_source"], "generic")
         self.assertIn("capabilities", payload)
         self.assertIn("runtime_policy", payload)
+        self.assertIn("provider_contract", payload)
+        self.assertIn("api_runtime", payload)
         self.assertEqual(payload["runtime_policy"]["transport_mode"], "owner_process_proxy")
         self.assertIn("llm_model", payload)
         self.assertIn("embedding_model", payload)
@@ -77,7 +80,8 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
 
         raw = agentmemory_runtime.CONFIG_PATH.read_text(encoding="ascii")
         decoded = json.loads(raw)
-        self.assertEqual(decoded["runtime"]["provider"], "mem0")
+        self.assertEqual(decoded["active_profile"], "default")
+        self.assertEqual(decoded["profiles"]["default"]["runtime"]["provider"], "mem0")
 
     def test_ensure_default_runtime_config_creates_generic_config(self) -> None:
         payload = agentmemory_runtime.ensure_default_runtime_config()
@@ -177,6 +181,89 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
 
         self.assertEqual(payload["provider"], "localjson")
         self.assertEqual(payload["totals"]["users"], 1)
+
+    def test_profile_document_supports_create_and_switch(self) -> None:
+        generic = agentmemory_runtime.default_runtime_config()
+        agentmemory_runtime.write_runtime_config(generic)
+
+        created = agentmemory_runtime.create_profile("staging")
+        self.assertEqual(created["runtime"]["runtime_dir"], str(agentmemory_runtime.RUNTIME_DIR / "staging"))
+
+        agentmemory_runtime.set_active_profile("staging")
+        payload = agentmemory_runtime.runtime_info()
+
+        self.assertEqual(payload["active_profile"], "staging")
+        self.assertIn("staging", payload["profiles"])
+
+    def test_provider_contract_matches_runtime_info(self) -> None:
+        generic = agentmemory_runtime.default_runtime_config()
+        generic["runtime"]["provider"] = "localjson"
+        generic["providers"]["localjson"] = agentmemory_runtime.provider_class("localjson").default_provider_config(
+            runtime_dir=self.temp_dir.name
+        )
+        agentmemory_runtime.write_runtime_config(generic)
+
+        self.assertEqual(agentmemory_runtime.active_provider_contract(), agentmemory_runtime.runtime_info()["provider_contract"])
+
+    def test_api_runtime_diagnostics_reports_available_when_port_is_free(self) -> None:
+        generic = agentmemory_runtime.default_runtime_config()
+        generic["runtime"]["provider"] = "localjson"
+        generic["providers"]["localjson"] = agentmemory_runtime.provider_class("localjson").default_provider_config(
+            runtime_dir=self.temp_dir.name
+        )
+        agentmemory_runtime.write_runtime_config(generic)
+        original_read_api_pid = agentmemory_runtime.read_api_pid
+        original_process_exists = agentmemory_runtime.process_exists
+        original_can_bind_api_port = agentmemory_runtime.can_bind_api_port
+        original_listening_pid_for_api_port = agentmemory_runtime.listening_pid_for_api_port
+        original_read_api_state = agentmemory_runtime.read_api_state
+        try:
+            agentmemory_runtime.read_api_pid = lambda: None  # type: ignore[assignment]
+            agentmemory_runtime.process_exists = lambda pid: False  # type: ignore[assignment]
+            agentmemory_runtime.can_bind_api_port = lambda host, port: True  # type: ignore[assignment]
+            agentmemory_runtime.listening_pid_for_api_port = lambda host, port: None  # type: ignore[assignment]
+            agentmemory_runtime.read_api_state = lambda: None  # type: ignore[assignment]
+
+            payload = agentmemory_runtime.runtime_info()
+        finally:
+            agentmemory_runtime.read_api_pid = original_read_api_pid  # type: ignore[assignment]
+            agentmemory_runtime.process_exists = original_process_exists  # type: ignore[assignment]
+            agentmemory_runtime.can_bind_api_port = original_can_bind_api_port  # type: ignore[assignment]
+            agentmemory_runtime.listening_pid_for_api_port = original_listening_pid_for_api_port  # type: ignore[assignment]
+            agentmemory_runtime.read_api_state = original_read_api_state  # type: ignore[assignment]
+
+        self.assertEqual(payload["api_runtime"]["status"], "available")
+        self.assertTrue(payload["api_runtime"]["port_available"])
+        self.assertEqual(payload["runtime_identity"]["profile"], "default")
+
+    def test_api_runtime_diagnostics_reports_foreign_listener_conflict_when_other_pid_owns_port(self) -> None:
+        generic = agentmemory_runtime.default_runtime_config()
+        agentmemory_runtime.write_runtime_config(generic)
+
+        original_read_api_pid = agentmemory_runtime.read_api_pid
+        original_process_exists = agentmemory_runtime.process_exists
+        original_can_bind_api_port = agentmemory_runtime.can_bind_api_port
+        original_listening_pid_for_api_port = agentmemory_runtime.listening_pid_for_api_port
+        original_read_api_state = agentmemory_runtime.read_api_state
+        try:
+            agentmemory_runtime.read_api_pid = lambda: 111  # type: ignore[assignment]
+            agentmemory_runtime.process_exists = lambda pid: pid == 111  # type: ignore[assignment]
+            agentmemory_runtime.can_bind_api_port = lambda host, port: False  # type: ignore[assignment]
+            agentmemory_runtime.listening_pid_for_api_port = lambda host, port: 222  # type: ignore[assignment]
+            agentmemory_runtime.read_api_state = lambda: {"pid": 111, "runtime_id": agentmemory_runtime.runtime_identity()["runtime_id"]}  # type: ignore[assignment]
+
+            payload = agentmemory_runtime.runtime_info()
+        finally:
+            agentmemory_runtime.read_api_pid = original_read_api_pid  # type: ignore[assignment]
+            agentmemory_runtime.process_exists = original_process_exists  # type: ignore[assignment]
+            agentmemory_runtime.can_bind_api_port = original_can_bind_api_port  # type: ignore[assignment]
+            agentmemory_runtime.listening_pid_for_api_port = original_listening_pid_for_api_port  # type: ignore[assignment]
+            agentmemory_runtime.read_api_state = original_read_api_state  # type: ignore[assignment]
+
+        self.assertEqual(payload["api_runtime"]["status"], "foreign_listener_conflict")
+        self.assertEqual(payload["api_runtime"]["recorded_pid"], 111)
+        self.assertEqual(payload["api_runtime"]["listener_pid"], 222)
+        self.assertFalse(payload["api_runtime"]["recorded_pid_owns_listener"])
 
 
 if __name__ == "__main__":

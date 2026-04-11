@@ -51,6 +51,20 @@ class ProviderRuntimePolicy(TypedDict):
     transport_mode: Literal["direct", "owner_process_proxy", "remote_only"]
 
 
+class ProviderContract(TypedDict):
+    contract_version: Literal["v2"]
+    record_shape: Literal["memory_record_v1"]
+    scope_kinds: list[Literal["user", "agent", "run"]]
+    consistency: Literal["immediate", "eventual"]
+    write_visibility: Literal["immediate", "owner_process_proxy", "eventual"]
+    update_semantics: Literal["replace"]
+    delete_semantics: Literal["hard_delete", "provider_defined"]
+    filter_semantics: Literal["record_and_metadata", "provider_defined"]
+    metadata_value_policy: Literal["json_object"]
+    supports_background_ingest: bool
+    supports_remote_transport: bool
+
+
 class MemoryRecord(TypedDict, total=False):
     id: str
     memory: str
@@ -137,6 +151,22 @@ class BaseMemoryProvider(ABC):
     @abstractmethod
     def runtime_policy(self) -> ProviderRuntimePolicy:
         raise NotImplementedError
+
+    def provider_contract(self) -> ProviderContract:
+        runtime_policy = self.runtime_policy()
+        return {
+            "contract_version": "v2",
+            "record_shape": "memory_record_v1",
+            "scope_kinds": ["user", "agent", "run"],
+            "consistency": "immediate",
+            "write_visibility": "owner_process_proxy" if runtime_policy["transport_mode"] == "owner_process_proxy" else "immediate",
+            "update_semantics": "replace",
+            "delete_semantics": "hard_delete",
+            "filter_semantics": "record_and_metadata",
+            "metadata_value_policy": "json_object",
+            "supports_background_ingest": False,
+            "supports_remote_transport": runtime_policy["transport_mode"] == "remote_only",
+        }
 
     @abstractmethod
     def doctor_rows(self) -> list[tuple[str, str]]:
