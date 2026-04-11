@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-BASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+BASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DATA_DIR="$BASE_DIR/data"
 PID_FILE="$DATA_DIR/agentmemory-api.pid"
 LOG_FILE="$DATA_DIR/agentmemory-api.log"
@@ -30,7 +30,7 @@ fi
 AGENTMEMORY_API_HOST="$HOST" \
 AGENTMEMORY_API_PORT="$PORT" \
 AGENTMEMORY_OWNER_PROCESS="1" \
-nohup "$BASE_DIR/run-agentmemory-python.sh" -m agentmemory.api >>"$LOG_FILE" 2>>"$ERR_FILE" &
+nohup "$BASE_DIR/scripts/run-agentmemory-python.sh" -m agentmemory.api >>"$LOG_FILE" 2>>"$ERR_FILE" &
 
 API_PID=$!
 echo "$API_PID" > "$PID_FILE"

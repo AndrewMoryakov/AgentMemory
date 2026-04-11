@@ -34,4 +34,4 @@ jobs:
 
       - name: Compile key modules
         run: |
-          python -m compileall agentmemory tests mcp-smoke-test.py
+          python -m compileall agentmemory tests scripts/mcp-smoke-test.py

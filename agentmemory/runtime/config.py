@@ -20,8 +20,8 @@ from agentmemory.providers.base import (
 def _looks_like_agentmemory_root(path: Path) -> bool:
     markers = [
         path / "pyproject.toml",
-        path / "run-agentmemory-python.sh",
-        path / "run-agentmemory-python.ps1",
+        path / "scripts" / "run-agentmemory-python.sh",
+        path / "scripts" / "run-agentmemory-python.ps1",
         path / "web",
     ]
     return any(marker.exists() for marker in markers)

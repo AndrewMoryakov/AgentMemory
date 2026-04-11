@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-BASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+BASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VENV_PYTHON="$BASE_DIR/.venv/bin/python"
 WINDOWS_VENV_PYTHON="$BASE_DIR/.venv/Scripts/python.exe"
 

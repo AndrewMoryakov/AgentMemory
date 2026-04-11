@@ -58,5 +58,5 @@ Useful project-level references:
 
 Read these after you understand the core product:
 
-- [Provider Adapter Rules](../PROVIDER_ADAPTER_RULES.md)
+- [Provider Adapter Rules](./PROVIDER_ADAPTER_RULES.md)
 - [Future Memory Providers](future-memory-providers/README.md)

@@ -7,8 +7,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agentmemory.platform import launcher_path
 from agentmemory.runtime.config import BASE_DIR
-RUN_MCP = BASE_DIR / "run-agentmemory-mcp.ps1"
+
+RUN_MCP = launcher_path(BASE_DIR, "run-agentmemory-mcp")
 SERVER_NAME = "agentmemory"
 BACKUP_ROOT = BASE_DIR / "data" / "backups" / "client-configs"
 
@@ -156,7 +158,7 @@ def text_config_status(path: Path, target: str, *, kind: str = "cli") -> dict[st
 
     raw = path.read_text(encoding="utf-8", errors="replace")
     configured = SERVER_NAME in raw
-    launcher_match = re.search(r"([A-Za-z]:[/\\\\].*?run-(?:agentmemory|mem0)-mcp\.ps1)", raw, re.IGNORECASE)
+    launcher_match = re.search(r"([A-Za-z]:[/\\\\].*?(?:scripts[/\\\\])?run-(?:agentmemory|mem0)-mcp\.ps1)", raw, re.IGNORECASE)
     launcher = normalize_launcher_path(launcher_match.group(1) if launcher_match else None)
     expected = normalize_launcher_path(expected_launcher_path())
     stale = bool(launcher) and launcher != expected
@@ -319,7 +321,7 @@ def cli_doctor(label: str, command_name: str, list_command: str) -> dict[str, An
 
 def local_server_doctor() -> dict[str, Any]:
     python = BASE_DIR / ".venv" / "Scripts" / "python.exe"
-    smoke = BASE_DIR / "mcp-smoke-test.py"
+    smoke = BASE_DIR / "scripts" / "mcp-smoke-test.py"
     if not python.exists():
         return {
             "ok": False,

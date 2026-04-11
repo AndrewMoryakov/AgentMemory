@@ -3,7 +3,7 @@ param(
     [string[]]$Args
 )
 
-$base = $PSScriptRoot
+$base = Split-Path -Parent $PSScriptRoot
 $venvPython = Join-Path $base '.venv\Scripts\python.exe'
 
 if (Test-Path $venvPython) {

@@ -1,6 +1,6 @@
 param()
 
-$base = $PSScriptRoot
+$base = Split-Path -Parent $PSScriptRoot
 $pidFile = Join-Path $base 'data\agentmemory-api.pid'
 
 if (-not (Test-Path $pidFile)) {

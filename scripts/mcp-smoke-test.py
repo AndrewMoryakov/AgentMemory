@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agentmemory.platform import launcher_command, launcher_path
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 SERVER = launcher_path(BASE_DIR, "run-agentmemory-mcp")
 
 

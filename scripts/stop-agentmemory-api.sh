@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-BASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+BASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PID_FILE="$BASE_DIR/data/agentmemory-api.pid"
 
 if [ ! -f "$PID_FILE" ]; then

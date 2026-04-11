@@ -1,6 +1,6 @@
 param()
 
-$base = $PSScriptRoot
+$base = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $base '.venv\Scripts\python.exe'
 $envFile = Join-Path $base '.env'
 

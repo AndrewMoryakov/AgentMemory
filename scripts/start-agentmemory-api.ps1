@@ -3,7 +3,7 @@ param(
     [int]$Port = 8765
 )
 
-$base = $PSScriptRoot
+$base = Split-Path -Parent $PSScriptRoot
 $pidFile = Join-Path $base 'data\agentmemory-api.pid'
 $logFile = Join-Path $base 'data\agentmemory-api.log'
 $errorFile = Join-Path $base 'data\agentmemory-api.err.log'

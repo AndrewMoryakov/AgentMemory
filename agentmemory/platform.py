@@ -17,7 +17,7 @@ def shell_command() -> str:
 
 def launcher_path(base_dir: Path, stem: str) -> Path:
     suffix = ".ps1" if is_windows() else ".sh"
-    return base_dir / f"{stem}{suffix}"
+    return base_dir / "scripts" / f"{stem}{suffix}"
 
 
 def launcher_command(script_path: Path) -> list[str]:

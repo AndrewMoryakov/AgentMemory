@@ -9,7 +9,7 @@ What real problem does this solve?
 ## Validation
 
 - [ ] `python -m unittest discover -s tests -v`
-- [ ] `python -m compileall agentmemory tests mcp-smoke-test.py`
+- [ ] `python -m compileall agentmemory tests scripts/mcp-smoke-test.py`
 - [ ] relevant manual verification completed
 
 ## Notes

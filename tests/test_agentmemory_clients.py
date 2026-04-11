@@ -46,7 +46,7 @@ class AgentMemoryClientsTests(unittest.TestCase):
     def test_text_config_status_detects_configured_launcher(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings.json"
-            path.write_text('{"agentmemory":{"args":["-File","O:/user files/Projects/tools/AgentMemory/run-agentmemory-mcp.ps1"]}}', encoding="utf-8")
+            path.write_text('{"agentmemory":{"args":["-File","O:/user files/Projects/tools/AgentMemory/scripts/run-agentmemory-mcp.ps1"]}}', encoding="utf-8")
             payload = agentmemory_clients.text_config_status(path, "cli-client")
             self.assertTrue(payload["configured"])
             self.assertEqual(payload["health"], "configured")

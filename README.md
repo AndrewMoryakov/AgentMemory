@@ -141,7 +141,7 @@ Current runtime layers:
 More detail:
 
 - [Architecture](docs/ARCHITECTURE.md)
-- [Provider Adapter Rules](PROVIDER_ADAPTER_RULES.md)
+- [Provider Adapter Rules](docs/PROVIDER_ADAPTER_RULES.md)
 - [Future Memory Providers](docs/future-memory-providers/README.md)
 
 ## Current Status
@@ -249,7 +249,7 @@ Useful local checks:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m compileall agentmemory tests mcp-smoke-test.py
+.\.venv\Scripts\python.exe -m compileall agentmemory tests scripts/mcp-smoke-test.py
 agentmemory mcp-smoke
 ```
 
@@ -259,7 +259,7 @@ AgentMemory treats providers as adapter layers behind one shared contract.
 
 Useful references:
 
-- [PROVIDER_CERTIFICATION.md](PROVIDER_CERTIFICATION.md)
+- [PROVIDER_CERTIFICATION.md](docs/PROVIDER_CERTIFICATION.md)
 - [tests/provider_contract_harness.py](tests/provider_contract_harness.py)
 
 Quick helper commands:

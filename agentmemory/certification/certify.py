@@ -183,7 +183,7 @@ def assess_provider(provider_name: str, *, run_tests: bool) -> CertificationAsse
         if target is not None
         else has_harness_consumer(provider_name)
     )
-    checklist_present = (BASE_DIR / "PROVIDER_CERTIFICATION.md").exists()
+    checklist_present = (BASE_DIR / "docs" / "PROVIDER_CERTIFICATION.md").exists()
     registry_status = target.status if target is not None else "unregistered"
     tests_passed = False
     test_summary: dict[str, object] | None = None
@@ -253,7 +253,7 @@ def list_targets_json() -> int:
 def certification_report(provider_name: str, *, run_tests: bool, summary_only: bool = False) -> int:
     target = get_target(provider_name)
     assessment = assess_provider(provider_name, run_tests=run_tests)
-    checklist_path = BASE_DIR / "PROVIDER_CERTIFICATION.md"
+    checklist_path = BASE_DIR / "docs" / "PROVIDER_CERTIFICATION.md"
 
     print(f"Provider certification helper: {provider_name}")
     if target is not None:

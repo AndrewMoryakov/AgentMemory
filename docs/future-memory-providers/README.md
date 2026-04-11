@@ -650,9 +650,9 @@ As new memory systems are added, AgentMemory should evolve toward this stance:
 
 When planning a new provider, read in this order:
 
-1. [PROVIDER_ADAPTER_RULES.md](/O:/user%20files/Projects/tools/AgentMemory/PROVIDER_ADAPTER_RULES.md)
-2. [PRELAUNCH_RISKS.md](/O:/user%20files/Projects/tools/AgentMemory/PRELAUNCH_RISKS.md)
-3. [PRELAUNCH_REMEDIATION.md](/O:/user%20files/Projects/tools/AgentMemory/PRELAUNCH_REMEDIATION.md)
+1. [PROVIDER_ADAPTER_RULES.md](/O:/user%20files/Projects/tools/AgentMemory/docs/PROVIDER_ADAPTER_RULES.md)
+2. [PRELAUNCH_RISKS.md](/O:/user%20files/Projects/tools/AgentMemory/docs/PRELAUNCH_RISKS.md)
+3. [PRELAUNCH_REMEDIATION.md](/O:/user%20files/Projects/tools/AgentMemory/docs/PRELAUNCH_REMEDIATION.md)
 4. [PROVIDER_INTEGRATION_CHECKLIST.md](/O:/user%20files/Projects/tools/AgentMemory/docs/future-memory-providers/PROVIDER_INTEGRATION_CHECKLIST.md)
 
 Then decide:

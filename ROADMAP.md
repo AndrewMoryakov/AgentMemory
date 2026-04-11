@@ -118,7 +118,7 @@ Why this matters:
 
 Treat provider modules as adapter layers, not thin SDK wrappers.
 
-The document [PROVIDER_ADAPTER_RULES.md](PROVIDER_ADAPTER_RULES.md) should remain part of the architectural baseline for all future providers.
+The document [PROVIDER_ADAPTER_RULES.md](docs/PROVIDER_ADAPTER_RULES.md) should remain part of the architectural baseline for all future providers.
 
 Why this matters:
 

@@ -39,7 +39,7 @@ Run these checks locally:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m compileall agentmemory tests mcp-smoke-test.py
+.\.venv\Scripts\python.exe -m compileall agentmemory tests scripts/mcp-smoke-test.py
 agentmemory mcp-smoke
 agentmemory doctor-clients --compact
 ```
@@ -48,7 +48,7 @@ POSIX shell equivalent:
 
 ```sh
 ./.venv/bin/python -m unittest discover -s tests -v
-./.venv/bin/python -m compileall agentmemory tests mcp-smoke-test.py
+./.venv/bin/python -m compileall agentmemory tests scripts/mcp-smoke-test.py
 agentmemory mcp-smoke
 ```
 
@@ -61,7 +61,7 @@ agentmemory --help
 
 If your change adds or substantially changes a provider, also follow:
 
-- [PROVIDER_CERTIFICATION.md](PROVIDER_CERTIFICATION.md)
+- [PROVIDER_CERTIFICATION.md](docs/PROVIDER_CERTIFICATION.md)
 - `agentmemory provider-certify <provider-name> --json --run-tests --summary-only`
 - `provider-certify-ci --json`
 
