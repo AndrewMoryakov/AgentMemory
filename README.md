@@ -240,6 +240,30 @@ This is one of the clearest examples of why a memory runtime layer can be useful
 .\.venv\Scripts\agentmemory.exe doctor-clients --compact
 ```
 
+## Root Entry Points
+
+For users who want one obvious launcher from the repository root, AgentMemory now also ships thin root wrappers for both Windows and POSIX shells.
+
+Windows:
+
+```powershell
+.\agentmemory.ps1 doctor
+.\start-agentmemory-api.ps1
+.\stop-agentmemory-api.ps1
+.\agentmemory-mcp.ps1
+```
+
+macOS / Linux:
+
+```sh
+./agentmemory.sh doctor
+./start-agentmemory-api.sh
+./stop-agentmemory-api.sh
+./agentmemory-mcp.sh
+```
+
+These wrappers delegate to the maintained scripts in `scripts/`, so the root stays user-friendly without moving the operational implementation out of `scripts/`.
+
 ## Browser UI
 
 The local API also serves a browser UI at:
