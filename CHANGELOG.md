@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is intentionally simple during public alpha.
 
+## [Unreleased]
+
+### Added
+
+- first-class `list_scopes` support across runtime, API, CLI, MCP, and admin surfaces
+- provider runtime transport policy as a public runtime contract
+- profile-aware runtime config with named profiles such as `default` and `staging`
+- runtime identity metadata in diagnostics
+- stronger API runtime diagnostics for PID, port, and listener ownership
+- formal `provider_contract()` V2 metadata for future provider integrations
+
+### Changed
+
+- repository layout is now package-first, with operational scripts in `scripts/`, snippets in `snippets/`, and provider/prelaunch docs in `docs/`
+- proxy routing is driven by provider runtime policy instead of shared-layer `mem0` name checks
+- `agentmemory start-api` now auto-selects a free port when the configured one is busy and updates runtime config accordingly
+- `doctor` now reports active profile, runtime id, config version, API runtime state, and provider contract version
+
+### Fixed
+
+- `mem0` add/update response normalization for empty or partial result wrappers
+- scope discovery for scope-required providers through `memory_list_scopes`
+- stale or misleading port/process diagnostics by distinguishing foreign listener conflicts from stale PID records
+
 ## [0.1.0] - 2026-04-04
 
 Initial public alpha release.

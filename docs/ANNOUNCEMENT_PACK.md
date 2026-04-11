@@ -53,7 +53,15 @@ Included in this public alpha:
 
 - shared runtime through CLI, HTTP API, and MCP
 - provider-based core with `mem0` and `localjson`
-- diagnostics, scope discovery, browser UI, and certification tooling
+- diagnostics, scope discovery, browser UI, certification tooling, and runtime profiles
+
+Recent improvements since the first public alpha:
+
+- `memory_list_scopes` for scope discovery in scope-required providers
+- runtime transport policy separated cleanly from provider-name branching
+- automatic free-port selection for local API startup
+- stronger runtime diagnostics for profile, PID, port ownership, and listener conflicts
+- formal provider contract `v2` metadata for future provider integrations
 
 Quick local path:
 
