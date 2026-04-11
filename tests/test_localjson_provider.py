@@ -1,51 +1,58 @@
-import tempfile
 import unittest
 
 from localjson_provider import LocalJsonProvider
+from tests.provider_contract_harness import ProviderContractHarness
 
 
-class LocalJsonProviderTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.provider = LocalJsonProvider(
-            runtime_config={"runtime_dir": self.temp_dir.name},
-            provider_config=LocalJsonProvider.default_provider_config(runtime_dir=self.temp_dir.name),
+class LocalJsonProviderTests(ProviderContractHarness, unittest.TestCase):
+    def create_provider(self, runtime_dir: str):
+        return LocalJsonProvider(
+            runtime_config={"runtime_dir": runtime_dir},
+            provider_config=LocalJsonProvider.default_provider_config(runtime_dir=runtime_dir),
         )
 
-    def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+    def test_localjson_capabilities_match_expected_behavior(self) -> None:
+        capabilities = self.provider.capabilities()
 
-    def test_add_and_get_memory(self) -> None:
-        created = self.provider.add_memory(
-            messages=[{"role": "user", "content": "prefers brutalist layouts"}],
-            user_id="hopt",
-            metadata={"topic": "design"},
-        )
+        self.assertFalse(capabilities["supports_semantic_search"])
+        self.assertTrue(capabilities["supports_text_search"])
+        self.assertTrue(capabilities["supports_filters"])
+        self.assertTrue(capabilities["supports_scopeless_list"])
+        self.assertTrue(capabilities["supports_scope_inventory"])
 
-        fetched = self.provider.get_memory(created["id"])
+    def test_list_scopes_returns_distinct_values_counts_and_filters(self) -> None:
+        self.provider.add_memory(messages=[{"role": "user", "content": "one"}], user_id="default")
+        self.provider.add_memory(messages=[{"role": "user", "content": "two"}], user_id="default", agent_id="writer")
+        self.provider.add_memory(messages=[{"role": "user", "content": "three"}], run_id="run-42")
 
-        self.assertEqual(fetched["memory"], "prefers brutalist layouts")
-        self.assertEqual(fetched["metadata"]["topic"], "design")
+        inventory = self.provider.list_scopes()
+        user_only = self.provider.list_scopes(kind="user")
+        filtered = self.provider.list_scopes(query="def")
 
-    def test_search_memory_returns_ranked_matches(self) -> None:
-        self.provider.add_memory(messages=[{"role": "user", "content": "prefers brutalist layouts"}], user_id="hopt")
-        self.provider.add_memory(messages=[{"role": "user", "content": "deploy target is local machine"}], user_id="hopt")
+        self.assertEqual(inventory["totals"]["users"], 1)
+        self.assertEqual(inventory["totals"]["agents"], 1)
+        self.assertEqual(inventory["totals"]["runs"], 1)
+        self.assertEqual(user_only["items"][0]["kind"], "user")
+        self.assertEqual(user_only["items"][0]["value"], "default")
+        self.assertEqual(user_only["items"][0]["count"], 2)
+        self.assertEqual(len(filtered["items"]), 1)
+        self.assertEqual(filtered["items"][0]["value"], "default")
+        self.assertEqual(user_only["totals"]["agents"], 1)
+        self.assertEqual(user_only["totals"]["runs"], 1)
 
-        results = self.provider.search_memory(query="brutalist", user_id="hopt", limit=5)
+    def test_list_scopes_orders_by_kind_count_value_and_honors_limit(self) -> None:
+        self.provider.add_memory(messages=[{"role": "user", "content": "a"}], user_id="bravo")
+        self.provider.add_memory(messages=[{"role": "user", "content": "b"}], user_id="alpha")
+        self.provider.add_memory(messages=[{"role": "user", "content": "c"}], user_id="alpha")
+        self.provider.add_memory(messages=[{"role": "user", "content": "d"}], agent_id="writer")
+        self.provider.add_memory(messages=[{"role": "user", "content": "e"}], run_id="run-2")
+        self.provider.add_memory(messages=[{"role": "user", "content": "f"}], run_id="run-1")
 
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["memory"], "prefers brutalist layouts")
-        self.assertGreaterEqual(results[0]["score"], 1.0)
+        inventory = self.provider.list_scopes(limit=3)
 
-    def test_update_and_delete_memory(self) -> None:
-        created = self.provider.add_memory(messages=[{"role": "user", "content": "old text"}], user_id="hopt")
-
-        updated = self.provider.update_memory(memory_id=created["id"], data="new text", metadata={"v": 2})
-        deleted = self.provider.delete_memory(memory_id=created["id"])
-
-        self.assertEqual(updated["memory"], "new text")
-        self.assertEqual(updated["metadata"]["v"], 2)
-        self.assertTrue(deleted["deleted"])
+        self.assertEqual([item["kind"] for item in inventory["items"]], ["agent", "run", "run"])
+        self.assertEqual([item["value"] for item in inventory["items"]], ["writer", "run-1", "run-2"])
+        self.assertEqual(inventory["totals"], {"users": 2, "agents": 1, "runs": 2})
 
 
 if __name__ == "__main__":

@@ -1,37 +1,87 @@
 import json
 import os
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from agentmemory_runtime import (
-    API_HOST,
-    API_PORT,
-    ConfigurationError,
-    health,
-    memory_add,
-    memory_delete,
-    memory_get,
-    memory_list,
-    memory_search,
-    memory_update,
+from agentmemory_admin import (
+    admin_stats,
+    delete_admin_memory,
+    get_admin_memory,
+    list_admin_memories,
+    pin_admin_memory,
+    update_admin_memory,
 )
+from agentmemory_operation_adapters import http_operation_source
+from agentmemory_operations import OPERATIONS
+from agentmemory_runtime import API_HOST, API_PORT, BASE_DIR
+from agentmemory_transport import (
+    provider_error_payload,
+    provider_error_status,
+)
+from memory_provider import (
+    MemoryNotFoundError,
+    ProviderError,
+    ProviderValidationError,
+)
+
+WEB_DIR = BASE_DIR / "web"
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "AgentMemory/1.0"
 
+    @staticmethod
+    def _client_disconnected(exc: Exception) -> bool:
+        return isinstance(exc, (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, socket.error))
+
     def _send(self, status, payload):
         body = json.dumps(payload, ensure_ascii=True, default=str).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            if not self._client_disconnected(exc):
+                raise
+
+    def _send_bytes(self, status, body: bytes, content_type: str) -> None:
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            if not self._client_disconnected(exc):
+                raise
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length else b"{}"
         return json.loads(raw.decode("utf-8")) if raw else {}
+
+    def _send_error_payload(self, status: int, exc: Exception) -> None:
+        if isinstance(exc, ProviderError):
+            self._send(status, provider_error_payload(exc) | {"error": str(exc)})
+            return
+        self._send(status, {"error": str(exc), "error_type": exc.__class__.__name__})
+
+    def _serve_web_file(self, relative_path: str, content_type: str) -> bool:
+        path = (WEB_DIR / relative_path).resolve()
+        try:
+            path.relative_to(WEB_DIR.resolve())
+        except ValueError:
+            self._send(404, {"error": "Not found"})
+            return True
+        if not path.exists():
+            self._send(404, {"error": "Not found"})
+            return True
+        self._send_bytes(200, path.read_bytes(), content_type)
+        return True
 
     def log_message(self, format, *args):
         return
@@ -40,79 +90,130 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         try:
+            if parsed.path in {"/", "/ui", "/ui/"}:
+                self._serve_web_file("index.html", "text/html; charset=utf-8")
+                return
+            if parsed.path == "/ui/app.js":
+                self._serve_web_file("app.js", "application/javascript; charset=utf-8")
+                return
+            if parsed.path == "/ui/styles.css":
+                self._serve_web_file("styles.css", "text/css; charset=utf-8")
+                return
             if parsed.path == "/health":
-                self._send(200, health())
+                self._send(200, OPERATIONS["health"].execute(http_operation_source("health")))
+                return
+            if parsed.path == "/admin/stats":
+                self._send(200, admin_stats(limit=int(params.get("limit", [500])[0])))
+                return
+            if parsed.path == "/admin/scopes":
+                self._send(200, OPERATIONS["list_scopes"].execute(http_operation_source("list_scopes", query_params=params)))
+                return
+            if parsed.path == "/admin/clients":
+                self._send(200, admin_stats(limit=50).get("clients", {}))
+                return
+            if parsed.path == "/admin/memories":
+                try:
+                    result = list_admin_memories(
+                        query=params.get("query", [None])[0],
+                        user_id=params.get("user_id", [None])[0],
+                        agent_id=params.get("agent_id", [None])[0],
+                        run_id=params.get("run_id", [None])[0],
+                        limit=int(params.get("limit", [100])[0]),
+                        pinned={"true": True, "false": False}.get((params.get("pinned", [None])[0] or "").lower()),
+                        archived={"true": True, "false": False}.get((params.get("archived", [None])[0] or "").lower()),
+                        include_archived=(params.get("include_archived", ["false"])[0].lower() == "true"),
+                    )
+                except ProviderError as exc:
+                    result = []
+                    self._send(200, {"items": result, "count": len(result), "warning": str(exc)})
+                    return
+                self._send(200, {"items": result, "count": len(result)})
+                return
+            if parsed.path.startswith("/admin/memories/"):
+                memory_id = parsed.path.rsplit("/", 1)[-1]
+                self._send(200, get_admin_memory(memory_id))
                 return
             if parsed.path == "/memories":
-                result = memory_list(
-                    user_id=params.get("user_id", [None])[0],
-                    agent_id=params.get("agent_id", [None])[0],
-                    run_id=params.get("run_id", [None])[0],
-                    limit=int(params.get("limit", [100])[0]),
-                )
+                result = OPERATIONS["list"].execute(http_operation_source("list", query_params=params))
                 self._send(200, result)
                 return
             if parsed.path.startswith("/memories/"):
                 memory_id = parsed.path.rsplit("/", 1)[-1]
-                self._send(200, memory_get(memory_id))
+                self._send(200, OPERATIONS["get"].execute(http_operation_source("get", path_params={"memory_id": memory_id})))
                 return
             self._send(404, {"error": "Not found"})
-        except ConfigurationError as exc:
-            self._send(503, {"error": str(exc)})
+        except ProviderError as exc:
+            self._send_error_payload(provider_error_status(exc), exc)
+        except json.JSONDecodeError as exc:
+            self._send_error_payload(400, ProviderValidationError(str(exc)))
         except Exception as exc:
             self._send(500, {"error": str(exc)})
 
     def do_POST(self):
         try:
+            if self.path.startswith("/admin/memories/") and self.path.endswith("/pin"):
+                memory_id = self.path.removeprefix("/admin/memories/").removesuffix("/pin").rstrip("/")
+                payload = self._read_json()
+                self._send(200, pin_admin_memory(memory_id, pinned=payload.get("pinned", True)))
+                return
             if self.path == "/add":
                 payload = self._read_json()
-                result = memory_add(
-                    messages=payload["messages"],
-                    user_id=payload.get("user_id"),
-                    agent_id=payload.get("agent_id"),
-                    run_id=payload.get("run_id"),
-                    metadata=payload.get("metadata"),
-                    infer=payload.get("infer", True),
-                    memory_type=payload.get("memory_type"),
-                )
+                result = OPERATIONS["add"].execute(http_operation_source("add", payload=payload))
                 self._send(200, result)
                 return
             if self.path == "/search":
                 payload = self._read_json()
-                result = memory_search(
-                    query=payload["query"],
-                    user_id=payload.get("user_id"),
-                    agent_id=payload.get("agent_id"),
-                    run_id=payload.get("run_id"),
-                    limit=payload.get("limit", 10),
-                    filters=payload.get("filters"),
-                    threshold=payload.get("threshold"),
-                    rerank=payload.get("rerank", True),
-                )
+                result = OPERATIONS["search"].execute(http_operation_source("search", payload=payload))
                 self._send(200, result)
                 return
             if self.path == "/update":
                 payload = self._read_json()
-                result = memory_update(memory_id=payload["memory_id"], data=payload["data"], metadata=payload.get("metadata"))
+                result = OPERATIONS["update"].execute(http_operation_source("update", payload=payload))
                 self._send(200, result)
                 return
             self._send(404, {"error": "Not found"})
-        except ConfigurationError as exc:
-            self._send(503, {"error": str(exc)})
+        except ProviderError as exc:
+            self._send_error_payload(provider_error_status(exc), exc)
         except KeyError as exc:
-            self._send(400, {"error": f"Missing field: {exc.args[0]}"})
+            self._send_error_payload(400, ProviderValidationError(f"Missing field: {exc.args[0]}"))
+        except Exception as exc:
+            self._send(500, {"error": str(exc)})
+
+    def do_PATCH(self):
+        try:
+            if self.path.startswith("/admin/memories/"):
+                memory_id = self.path.rsplit("/", 1)[-1]
+                payload = self._read_json()
+                result = update_admin_memory(
+                    memory_id,
+                    memory=payload.get("memory"),
+                    metadata=payload.get("metadata"),
+                    pinned=payload.get("pinned"),
+                    archived=payload.get("archived"),
+                )
+                self._send(200, result)
+                return
+            self._send(404, {"error": "Not found"})
+        except ProviderError as exc:
+            self._send_error_payload(provider_error_status(exc), exc)
+        except KeyError as exc:
+            self._send_error_payload(404, MemoryNotFoundError(f"Missing memory: {exc.args[0]}"))
         except Exception as exc:
             self._send(500, {"error": str(exc)})
 
     def do_DELETE(self):
         try:
+            if self.path.startswith("/admin/memories/"):
+                memory_id = self.path.rsplit("/", 1)[-1]
+                self._send(200, delete_admin_memory(memory_id))
+                return
             if self.path.startswith("/memories/"):
                 memory_id = self.path.rsplit("/", 1)[-1]
-                self._send(200, memory_delete(memory_id=memory_id))
+                self._send(200, OPERATIONS["delete"].execute(http_operation_source("delete", path_params={"memory_id": memory_id})))
                 return
             self._send(404, {"error": "Not found"})
-        except ConfigurationError as exc:
-            self._send(503, {"error": str(exc)})
+        except ProviderError as exc:
+            self._send_error_payload(provider_error_status(exc), exc)
         except Exception as exc:
             self._send(500, {"error": str(exc)})
 

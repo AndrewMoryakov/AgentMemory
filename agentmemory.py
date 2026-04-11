@@ -1,12 +1,26 @@
 import argparse
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
+import time
+import urllib.request
 from pathlib import Path
 from typing import Any, Iterable
 
+from agentmemory_guidance import client_runtime_guidance, guidance_summary_lines, provider_guidance
+from agentmemory_interactive import (
+    InteractiveContext,
+    build_prompt_session,
+    interactive_help,
+    render_home_screen,
+    normalize_command_line,
+    onboarding_needed,
+    run_onboarding,
+    shell_intro,
+)
 from agentmemory_platform import is_windows, launcher_command, launcher_path, shell_command, venv_python_path
 from agentmemory_runtime import (
     CONFIG_PATH,
@@ -19,18 +33,24 @@ from agentmemory_runtime import (
     runtime_info,
     write_runtime_config,
 )
+from agentmemory_transport import capability_summary
+from provider_certify import certification_report, certification_report_json, list_targets, list_targets_json
 
 
 BASE_DIR = Path(__file__).resolve().parent
-VENV_DIR = BASE_DIR / ".venv"
+VENV_DIR = BASE_DIR / '.venv'
 VENV_PYTHON = venv_python_path(BASE_DIR)
-STOP_API = launcher_path(BASE_DIR, "stop-agentmemory-api")
-START_API = launcher_path(BASE_DIR, "start-agentmemory-api")
-MCP_SMOKE = BASE_DIR / "mcp-smoke-test.py"
-MCP_SNIPPET = BASE_DIR / "claude-code.mcp.json"
-GEMINI_SNIPPET = BASE_DIR / "gemini-settings-snippet.json"
-CLIENTS_HELPER = BASE_DIR / "agentmemory_clients.py"
-PLACEHOLDER_KEYS = {"paste-your-openrouter-key-here", "YOUR_OPENROUTER_API_KEY"}
+STOP_API = launcher_path(BASE_DIR, 'stop-agentmemory-api')
+START_API = launcher_path(BASE_DIR, 'start-agentmemory-api')
+MCP_SMOKE = BASE_DIR / 'mcp-smoke-test.py'
+MCP_SNIPPET = BASE_DIR / 'claude-code.mcp.json'
+GEMINI_SNIPPET = BASE_DIR / 'gemini-settings-snippet.json'
+CLIENTS_HELPER = BASE_DIR / 'agentmemory_clients.py'
+API_SCRIPT = BASE_DIR / 'agentmemory_api.py'
+API_PID_FILE = BASE_DIR / 'data' / 'agentmemory-api.pid'
+API_LOG_FILE = BASE_DIR / 'data' / 'agentmemory-api.log'
+API_ERR_FILE = BASE_DIR / 'data' / 'agentmemory-api.err.log'
+PLACEHOLDER_KEYS = {'paste-your-openrouter-key-here', 'YOUR_OPENROUTER_API_KEY'}
 
 
 def has_real_openrouter_key(value: str | None) -> bool:
@@ -41,57 +61,55 @@ def has_real_openrouter_key(value: str | None) -> bool:
 
 
 def color(text: str, code: str) -> str:
-    return f"\033[{code}m{text}\033[0m" if sys.stdout.isatty() else text
+    return f'\033[{code}m{text}\033[0m' if sys.stdout.isatty() else text
 
 
 def ok(text: str) -> str:
-    return color(f"[ok] {text}", "32")
+    return color(f'[ok] {text}', '32')
 
 
 def warn(text: str) -> str:
-    return color(f"[warn] {text}", "33")
+    return color(f'[warn] {text}', '33')
 
 
 def err(text: str) -> str:
-    return color(f"[err] {text}", "31")
+    return color(f'[err] {text}', '31')
 
 
 def info(text: str) -> str:
-    return color(f"[info] {text}", "36")
+    return color(f'[info] {text}', '36')
 
 
 def heading(text: str) -> None:
-    line = "=" * len(text)
-    print(color(line, "36"))
-    print(color(text, "36;1"))
-    print(color(line, "36"))
+    line = '=' * len(text)
+    print(color(line, '36'))
+    print(color(text, '36;1'))
+    print(color(line, '36'))
 
 
 def truncate(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
-    return value[: max(0, limit - 3)] + "..."
+    return value[: max(0, limit - 3)] + '...'
 
 
 def render_table(rows: list[dict[str, Any]], columns: list[tuple[str, str, int]]) -> str:
     headers = [header for header, _, _ in columns]
     widths = []
     for header, key, width in columns:
-        cell_width = max(
-            [len(header)] + [len(truncate(str(row.get(key, "")), width)) for row in rows],
-        )
+        cell_width = max([len(header)] + [len(truncate(str(row.get(key, '')), width)) for row in rows])
         widths.append(min(width, cell_width))
 
     def render_row(values: list[str]) -> str:
         padded = []
         for idx, value in enumerate(values):
             padded.append(truncate(value, widths[idx]).ljust(widths[idx]))
-        return "  ".join(padded)
+        return '  '.join(padded)
 
-    lines = [render_row(headers), render_row(["-" * w for w in widths])]
+    lines = [render_row(headers), render_row(['-' * w for w in widths])]
     for row in rows:
-        lines.append(render_row([str(row.get(key, "")) for _, key, _ in columns]))
-    return "\n".join(lines)
+        lines.append(render_row([str(row.get(key, '')) for _, key, _ in columns]))
+    return '\n'.join(lines)
 
 
 def run_clients_helper(*helper_args: str) -> tuple[int, dict[str, Any] | None, str]:
@@ -112,19 +130,19 @@ def print_status_payload(payload: dict[str, Any], as_json: bool) -> None:
         return
 
     rows = []
-    for item in payload.get("results", []):
-        details = item.get("details", "")
-        if not details and item.get("path"):
-            details = item["path"]
+    for item in payload.get('results', []):
+        details = item.get('details', '')
+        if not details and item.get('path'):
+            details = item['path']
         rows.append(
             {
-                "target": item.get("target", ""),
-                "connected": "yes" if item.get("connected") else "no",
-                "kind": item.get("kind", "config" if item.get("path") else "cli"),
-                "details": details,
+                'target': item.get('target', ''),
+                'connected': 'yes' if item.get('connected') else 'no',
+                'kind': item.get('kind', 'config' if item.get('path') else 'cli'),
+                'details': details,
             }
         )
-    print(render_table(rows, [("Target", "target", 18), ("Connected", "connected", 10), ("Kind", "kind", 10), ("Details", "details", 90)]))
+    print(render_table(rows, [('Target', 'target', 18), ('Connected', 'connected', 10), ('Kind', 'kind', 10), ('Details', 'details', 90)]))
 
 
 def print_doctor_payload(payload: dict[str, Any], as_json: bool) -> None:
@@ -132,64 +150,88 @@ def print_doctor_payload(payload: dict[str, Any], as_json: bool) -> None:
         print(json.dumps(payload, ensure_ascii=True, indent=2))
         return
 
-    local_server = payload.get("local_server", {})
-    status_line = ok("local MCP server smoke test passed") if local_server.get("ok") else warn("local MCP server smoke test failed")
+    local_server = payload.get('local_server', {})
+    status_line = ok('local MCP server smoke test passed') if local_server.get('ok') else warn('local MCP server smoke test failed')
     print(status_line)
-    if local_server.get("details"):
-        print(truncate(str(local_server["details"]), 140))
+    if local_server.get('details'):
+        print(truncate(str(local_server['details']), 140))
     print()
 
     rows = []
-    for item in payload.get("results", []):
-        details = item.get("details", "")
-        if not details and item.get("path"):
-            details = item["path"]
+    for item in payload.get('results', []):
+        details = item.get('details', '')
+        if not details and item.get('path'):
+            details = item['path']
         rows.append(
             {
-                "target": item.get("target", ""),
-                "detected": "yes" if item.get("detected", item.get("path") is not None) else "no",
-                "connected": "yes" if item.get("connected") else "no",
-                "health": item.get("health", ""),
-                "kind": item.get("kind", "config" if item.get("path") else "cli"),
-                "details": details,
+                'target': item.get('target', ''),
+                'detected': 'yes' if item.get('detected', item.get('path') is not None) else 'no',
+                'connected': 'yes' if item.get('connected') else 'no',
+                'health': item.get('health', ''),
+                'kind': item.get('kind', 'config' if item.get('path') else 'cli'),
+                'details': details,
             }
         )
-    print(render_table(rows, [("Target", "target", 18), ("Detected", "detected", 10), ("Connected", "connected", 10), ("Health", "health", 16), ("Kind", "kind", 10), ("Details", "details", 80)]))
+    print(render_table(rows, [('Target', 'target', 18), ('Detected', 'detected', 10), ('Connected', 'connected', 10), ('Health', 'health', 16), ('Kind', 'kind', 10), ('Details', 'details', 80)]))
+
+
+def print_provider_guidance(guidance: list[dict[str, str]]) -> None:
+    if not guidance:
+        return
+    print()
+    print(info('Operational guidance:'))
+    for item in guidance:
+        marker = warn if item.get('level') == 'warn' else info
+        print(marker(item['message']))
+
+
+def enrich_client_payload(payload: dict[str, Any], info_payload: dict[str, Any], *, include_local_server: bool = False) -> dict[str, Any]:
+    local_server_ok = None
+    if include_local_server:
+        local_server_ok = bool(payload.get('local_server', {}).get('ok'))
+    guidance = provider_guidance(info_payload['provider'], info_payload.get('capabilities', {}))
+    client_guidance = client_runtime_guidance(
+        info_payload['provider'],
+        info_payload.get('capabilities', {}),
+        payload.get('results', []),
+        local_server_ok=local_server_ok,
+    )
+    return {
+        **payload,
+        'provider': info_payload['provider'],
+        'provider_guidance': guidance,
+        'client_runtime_guidance': client_guidance,
+    }
 
 
 def print_status_compact(payload: dict[str, Any]) -> None:
     rows = []
-    for item in payload.get("results", []):
-        state = "connected" if item.get("connected") else "not_connected"
-        if item.get("kind") != "cli" and item.get("connected"):
-            state = "configured"
-        if item.get("details") == "not detected":
-            state = "not_detected"
-        rows.append({"target": item.get("target", ""), "state": state})
-    print(render_table(rows, [("Target", "target", 18), ("State", "state", 16)]))
+    for item in payload.get('results', []):
+        state = 'connected' if item.get('connected') else 'not_connected'
+        if item.get('kind') != 'cli' and item.get('connected'):
+            state = 'configured'
+        if item.get('details') == 'not detected':
+            state = 'not_detected'
+        rows.append({'target': item.get('target', ''), 'state': state})
+    print(render_table(rows, [('Target', 'target', 18), ('State', 'state', 16)]))
 
 
 def print_doctor_compact(payload: dict[str, Any]) -> None:
-    rows = [
-        {
-            "target": "local-server",
-            "state": payload.get("local_server", {}).get("health", "unknown"),
-        }
-    ]
-    for item in payload.get("results", []):
-        rows.append({"target": item.get("target", ""), "state": item.get("health", "unknown")})
-    print(render_table(rows, [("Target", "target", 18), ("State", "state", 16)]))
+    rows = [{'target': 'local-server', 'state': payload.get('local_server', {}).get('health', 'unknown')}]
+    for item in payload.get('results', []):
+        rows.append({'target': item.get('target', ''), 'state': item.get('health', 'unknown')})
+    print(render_table(rows, [('Target', 'target', 18), ('State', 'state', 16)]))
 
 
 def doctor_exit_code(payload: dict[str, Any]) -> int:
-    local_ok = bool(payload.get("local_server", {}).get("ok"))
+    local_ok = bool(payload.get('local_server', {}).get('ok'))
     client_issue = False
-    for item in payload.get("results", []):
-        detected = item.get("detected", item.get("path") is not None)
-        health = item.get("health", "")
+    for item in payload.get('results', []):
+        detected = item.get('detected', item.get('path') is not None)
+        health = item.get('health', '')
         if not detected:
             continue
-        if health not in {"connected", "configured"}:
+        if health not in {'connected', 'configured'}:
             client_issue = True
             break
 
@@ -206,11 +248,11 @@ def load_env_file() -> dict[str, str]:
     data: dict[str, str] = {}
     if not ENV_PATH.exists():
         return data
-    for raw_line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+    for raw_line in ENV_PATH.read_text(encoding='utf-8').splitlines():
         line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+        if not line or line.startswith('#') or '=' not in line:
             continue
-        key, value = line.split("=", 1)
+        key, value = line.split('=', 1)
         data[key.strip()] = value.strip().strip('"').strip("'")
     return data
 
@@ -229,21 +271,13 @@ def read_config() -> dict:
 
 
 def active_provider_name_from_config(config: dict[str, Any]) -> str:
-    return config.get("runtime", {}).get("provider", "mem0")
-
-
-def active_provider_config(config: dict[str, Any]) -> dict[str, Any]:
-    provider_name = active_provider_name_from_config(config)
-    providers = config.get("providers", {})
-    if provider_name not in providers:
-        raise KeyError(provider_name)
-    return providers[provider_name]
+    return config.get('runtime', {}).get('provider', 'mem0')
 
 
 def ensure_provider_config(config: dict[str, Any], provider_name: str) -> dict[str, Any]:
-    providers = config.setdefault("providers", {})
+    providers = config.setdefault('providers', {})
     if provider_name not in providers:
-        runtime_dir = config.get("runtime", {}).get("runtime_dir", str(BASE_DIR / "data"))
+        runtime_dir = config.get('runtime', {}).get('runtime_dir', str(BASE_DIR / 'data'))
         providers[provider_name] = provider_class(provider_name).default_provider_config(runtime_dir=runtime_dir)
     return providers[provider_name]
 
@@ -260,24 +294,24 @@ def write_env(values: dict[str, str]) -> None:
     current = load_env_file()
     current.update({k: v for k, v in values.items() if v is not None})
     lines = [
-        "# AgentMemory local environment",
-        "# Generated by agentmemory.py",
+        '# AgentMemory local environment',
+        '# Generated by agentmemory.py',
     ]
     for key in sorted(current):
-        lines.append(f"{key}={current[key]}")
-    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        lines.append(f'{key}={current[key]}')
+    ENV_PATH.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
 def current_claude_code_snippet() -> dict[str, Any]:
-    launcher = launcher_path(BASE_DIR, "run-agentmemory-mcp")
+    launcher = launcher_path(BASE_DIR, 'run-agentmemory-mcp')
     return {
-        "mcpServers": {
-            "agentmemory": {
-                "type": "stdio",
-                "command": shell_command(),
-                "args": launcher_command(launcher)[1:],
-                "env": {
-                    "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
+        'mcpServers': {
+            'agentmemory': {
+                'type': 'stdio',
+                'command': shell_command(),
+                'args': launcher_command(launcher)[1:],
+                'env': {
+                    'OPENROUTER_API_KEY': '${OPENROUTER_API_KEY}',
                 },
             }
         }
@@ -285,14 +319,14 @@ def current_claude_code_snippet() -> dict[str, Any]:
 
 
 def current_gemini_snippet() -> dict[str, Any]:
-    launcher = launcher_path(BASE_DIR, "run-agentmemory-mcp")
+    launcher = launcher_path(BASE_DIR, 'run-agentmemory-mcp')
     return {
-        "mcpServers": {
-            "agentmemory": {
-                "command": shell_command(),
-                "args": launcher_command(launcher)[1:],
-                "env": {
-                    "OPENROUTER_API_KEY": "YOUR_OPENROUTER_API_KEY",
+        'mcpServers': {
+            'agentmemory': {
+                'command': shell_command(),
+                'args': launcher_command(launcher)[1:],
+                'env': {
+                    'OPENROUTER_API_KEY': 'YOUR_OPENROUTER_API_KEY',
                 },
             }
         }
@@ -302,23 +336,23 @@ def current_gemini_snippet() -> dict[str, Any]:
 def resolve_bootstrap_python(value: str | None) -> list[str]:
     if value:
         return [value]
-    if Path(sys.executable).exists() and "python" in Path(sys.executable).name.lower():
+    if Path(sys.executable).exists() and 'python' in Path(sys.executable).name.lower():
         return [sys.executable]
     if is_windows():
-        return ["py", "-3.13"]
-    return [shutil.which("python3") or "python3"]
+        return ['py', '-3.13']
+    return [shutil.which('python3') or 'python3']
 
 
 def apply_runtime_configuration(config: dict[str, Any], args: argparse.Namespace) -> bool:
     changed = False
-    runtime = config.setdefault("runtime", {})
-    if getattr(args, "api_host", None):
-        if runtime.get("api_host") != args.api_host:
-            runtime["api_host"] = args.api_host
+    runtime = config.setdefault('runtime', {})
+    if getattr(args, 'api_host', None):
+        if runtime.get('api_host') != args.api_host:
+            runtime['api_host'] = args.api_host
             changed = True
-    if getattr(args, "api_port", None) is not None:
-        if runtime.get("api_port") != args.api_port:
-            runtime["api_port"] = args.api_port
+    if getattr(args, 'api_port', None) is not None:
+        if runtime.get('api_port') != args.api_port:
+            runtime['api_port'] = args.api_port
             changed = True
     return changed
 
@@ -327,14 +361,14 @@ def run(command: Iterable[str], *, env: dict[str, str] | None = None, check: boo
     process_env = merged_env()
     if env:
         process_env.update(env)
-    process_env.setdefault("PYTHONUTF8", "1")
+    process_env.setdefault('PYTHONUTF8', '1')
     return subprocess.run(
         list(command),
         check=check,
         env=process_env,
         text=True,
-        encoding="utf-8",
-        errors="replace",
+        encoding='utf-8',
+        errors='replace',
         capture_output=capture_output,
     )
 
@@ -344,157 +378,333 @@ def launcher_file(script: Path, *args: str, env: dict[str, str] | None = None, c
     return run(command, env=env, capture_output=capture_output)
 
 
+def api_health_url(host: str, port: int) -> str:
+    return f'http://{host}:{port}/health'
+
+
+def api_is_ready(host: str, port: int, *, timeout_seconds: float = 2.0) -> bool:
+    try:
+        with urllib.request.urlopen(api_health_url(host, port), timeout=timeout_seconds) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def read_api_pid() -> int | None:
+    if not API_PID_FILE.exists():
+        return None
+    try:
+        return int(API_PID_FILE.read_text(encoding='ascii').strip())
+    except Exception:
+        return None
+
+
+def process_exists(pid: int | None) -> bool:
+    if not pid:
+        return False
+    if not is_windows():
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    try:
+        proc = subprocess.run(
+            ['tasklist', '/FI', f'PID eq {pid}'],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+        )
+        return str(pid) in proc.stdout
+    except Exception:
+        return False
+
+
+def start_api_process(host: str, port: int) -> tuple[bool, str]:
+    API_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    existing_pid = read_api_pid()
+    if existing_pid and process_exists(existing_pid) and api_is_ready(host, port, timeout_seconds=1.0):
+        return True, f'AgentMemory API is already running with PID {existing_pid} on {api_health_url(host, port).removesuffix("/health")}'
+
+    if existing_pid and process_exists(existing_pid):
+        stop_api_process()
+
+    env = merged_env({
+        'AGENTMEMORY_API_HOST': host,
+        'AGENTMEMORY_API_PORT': str(port),
+        'AGENTMEMORY_OWNER_PROCESS': '1',
+        'PYTHONUTF8': '1',
+    })
+    stdout_handle = API_LOG_FILE.open('w', encoding='utf-8')
+    stderr_handle = API_ERR_FILE.open('w', encoding='utf-8')
+    creationflags = 0
+    if is_windows():
+        creationflags = getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0) | getattr(subprocess, 'DETACHED_PROCESS', 0)
+    try:
+        process = subprocess.Popen(
+            [str(VENV_PYTHON), str(API_SCRIPT)],
+            cwd=str(BASE_DIR),
+            env=env,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            creationflags=creationflags,
+        )
+    finally:
+        stdout_handle.close()
+        stderr_handle.close()
+
+    API_PID_FILE.write_text(str(process.pid), encoding='ascii')
+
+    for _ in range(40):
+        time.sleep(0.25)
+        if api_is_ready(host, port, timeout_seconds=1.0):
+            return True, f'AgentMemory API started with PID {process.pid} on http://{host}:{port}. Logs: {API_LOG_FILE}, {API_ERR_FILE}'
+        if process.poll() is not None:
+            break
+
+    API_PID_FILE.unlink(missing_ok=True)
+    error_text = ''
+    if API_ERR_FILE.exists():
+        error_text = API_ERR_FILE.read_text(encoding='utf-8', errors='replace').strip()
+    if not error_text and API_LOG_FILE.exists():
+        error_text = API_LOG_FILE.read_text(encoding='utf-8', errors='replace').strip()
+    details = f' {error_text}' if error_text else ''
+    return False, f'AgentMemory API failed to start on http://{host}:{port}.{details}'
+
+
+def stop_api_process() -> tuple[bool, str]:
+    pid = read_api_pid()
+    if not pid:
+        return True, 'AgentMemory API PID file not found.'
+    if not process_exists(pid):
+        API_PID_FILE.unlink(missing_ok=True)
+        return True, 'AgentMemory API process is not running.'
+
+    if is_windows():
+        result = subprocess.run(
+            ['taskkill', '/PID', str(pid), '/F'],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+        )
+        success = result.returncode == 0
+        details = (result.stderr or result.stdout or f'Failed to stop AgentMemory API process {pid}').strip()
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            success = True
+            details = f'Stopped AgentMemory API process {pid}'
+        except OSError as exc:
+            success = False
+            details = str(exc)
+    API_PID_FILE.unlink(missing_ok=True)
+    if success:
+        return True, f'Stopped AgentMemory API process {pid}'
+    return False, details
+
+
 def command_install(args: argparse.Namespace) -> int:
-    heading("AgentMemory Install")
-    (BASE_DIR / "data").mkdir(exist_ok=True)
+    heading('AgentMemory Install')
+    (BASE_DIR / 'data').mkdir(exist_ok=True)
     bootstrap = resolve_bootstrap_python(args.python)
     install_config = read_config() if CONFIG_PATH.exists() and not args.rewrite_config else default_config()
     provider_changed = False
     if args.provider:
-        provider_changed = install_config.get("runtime", {}).get("provider") != args.provider
-        install_config["runtime"]["provider"] = args.provider
+        provider_changed = install_config.get('runtime', {}).get('provider') != args.provider
+        install_config['runtime']['provider'] = args.provider
         ensure_provider_config(install_config, args.provider)
     apply_runtime_configuration(install_config, args)
-    active_provider = provider_class(install_config["runtime"]["provider"])
+    active_provider = provider_class(install_config['runtime']['provider'])
 
     if not VENV_PYTHON.exists() or args.recreate_venv:
         if args.recreate_venv and VENV_DIR.exists():
-            print(warn(f"Removing existing venv at {VENV_DIR}"))
+            print(warn(f'Removing existing venv at {VENV_DIR}'))
             shutil.rmtree(VENV_DIR, ignore_errors=True)
         print(info(f"Creating virtual environment with {' '.join(bootstrap)}"))
-        run([*bootstrap, "-m", "venv", str(VENV_DIR)])
-        print(ok(f"Virtual environment ready: {VENV_DIR}"))
+        run([*bootstrap, '-m', 'venv', str(VENV_DIR)])
+        print(ok(f'Virtual environment ready: {VENV_DIR}'))
     else:
-        print(ok(f"Virtual environment already exists: {VENV_DIR}"))
+        print(ok(f'Virtual environment already exists: {VENV_DIR}'))
 
-    print(info("Ensuring pip is available"))
-    run([str(VENV_PYTHON), "-m", "ensurepip", "--upgrade"])
+    print(info('Ensuring pip is available'))
+    run([str(VENV_PYTHON), '-m', 'ensurepip', '--upgrade'])
 
     if not args.skip_pip:
         requirements = active_provider.install_requirements()
         if requirements:
             print(info(f"Installing provider dependencies for {active_provider.display_name}: {' '.join(requirements)}"))
-            run([str(VENV_PYTHON), "-m", "pip", "install", "--upgrade", "pip", *requirements])
-            print(ok(f"Installed provider dependencies for {active_provider.display_name}"))
+            run([str(VENV_PYTHON), '-m', 'pip', 'install', '--upgrade', 'pip', *requirements])
+            print(ok(f'Installed provider dependencies for {active_provider.display_name}'))
         else:
-            print(info(f"No extra provider dependencies declared for {active_provider.display_name}"))
+            print(info(f'No extra provider dependencies declared for {active_provider.display_name}'))
     else:
-        print(warn("Skipped pip installation by request"))
+        print(warn('Skipped pip installation by request'))
 
     if not CONFIG_PATH.exists() or args.rewrite_config or provider_changed:
         config_to_write = install_config if not args.rewrite_config else default_config()
         write_config(config_to_write)
-        print(ok(f"Wrote config: {CONFIG_PATH}"))
+        print(ok(f'Wrote config: {CONFIG_PATH}'))
     else:
-        print(ok(f"Config already exists: {CONFIG_PATH}"))
+        print(ok(f'Config already exists: {CONFIG_PATH}'))
 
     if not ENV_PATH.exists():
-        write_env({"OPENROUTER_API_KEY": "paste-your-openrouter-key-here"})
-        print(warn(f"Created placeholder env file: {ENV_PATH}"))
+        write_env({'OPENROUTER_API_KEY': 'paste-your-openrouter-key-here'})
+        print(warn(f'Created placeholder env file: {ENV_PATH}'))
     else:
-        print(ok(f"Env file already exists: {ENV_PATH}"))
+        print(ok(f'Env file already exists: {ENV_PATH}'))
 
     print()
-    print(info("Next step:"))
-    print(f"  {ENV_PATH}")
-    print("  Put provider credentials in .env if needed, then run `agentmemory doctor`.")
+    print(info('Next step:'))
+    print(f'  {ENV_PATH}')
+    print('  Put provider credentials in .env if needed, then run `agentmemory doctor`.')
     return 0
 
 
 def command_configure(args: argparse.Namespace) -> int:
-    heading("AgentMemory Configure")
+    heading('AgentMemory Configure')
     config = read_config()
     provider_name = args.provider or active_provider_name_from_config(config)
-    provider_switched = config.get("runtime", {}).get("provider") != provider_name
+    provider_switched = config.get('runtime', {}).get('provider') != provider_name
     if provider_switched:
-        config["runtime"]["provider"] = provider_name
+        config['runtime']['provider'] = provider_name
     provider_config = ensure_provider_config(config, provider_name)
     provider_type = provider_class(provider_name)
-    changed = provider_switched or apply_runtime_configuration(config, args) or provider_type.apply_cli_configuration(provider_config=provider_config, args=args)
+    runtime_changed = apply_runtime_configuration(config, args)
+    provider_config_changed = provider_type.apply_cli_configuration(provider_config=provider_config, args=args)
+    changed = provider_switched or runtime_changed or provider_config_changed
     if changed:
         write_config(config)
-        print(ok(f"Updated config: {CONFIG_PATH}"))
+        print(ok(f'Updated config: {CONFIG_PATH}'))
     else:
-        print(info("No config fields changed"))
+        print(info('No config fields changed'))
 
     env_updates = provider_type.env_updates_from_args(args)
     if env_updates:
         write_env(env_updates)
-        print(ok(f"Updated provider environment in {ENV_PATH}"))
+        print(ok(f'Updated provider environment in {ENV_PATH}'))
 
     print(json.dumps(config, ensure_ascii=True, indent=2))
     return 0
 
 
+def command_help(_: argparse.Namespace) -> int:
+    context = InteractiveContext(
+        config_path=CONFIG_PATH,
+        env_path=ENV_PATH,
+        venv_python=VENV_PYTHON,
+        api_host=runtime_info().get('api_host', '127.0.0.1'),
+        api_port=runtime_info().get('api_port', 8765),
+    )
+    print(interactive_help(context))
+    return 0
+
+
+def command_list_scopes(args: argparse.Namespace) -> int:
+    heading('AgentMemory Scope Inventory')
+    result = run(
+        [
+            str(VENV_PYTHON),
+            str(BASE_DIR / 'agentmemory_cli.py'),
+            'list-scopes',
+            '--limit',
+            str(args.limit),
+            *(['--kind', args.kind] if args.kind else []),
+            *(['--query', args.query] if args.query else []),
+        ],
+        check=False,
+        capture_output=True,
+        env=merged_env(),
+    )
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+    return result.returncode
+
+
 def command_doctor(_: argparse.Namespace) -> int:
-    heading("AgentMemory Doctor")
+    heading('AgentMemory Doctor')
     config_source = load_runtime_config_with_source()[1]
     info_payload = runtime_info()
     provider = get_provider()
 
-    print(ok(f"Project directory: {BASE_DIR}"))
+    print(ok(f'Project directory: {BASE_DIR}'))
     print(ok(f"Active config: {info_payload['config_path']}"))
     if ENV_PATH.exists():
-        print(ok(f"Env file: {ENV_PATH}"))
+        print(ok(f'Env file: {ENV_PATH}'))
     else:
-        print(warn(f"Env file missing: {ENV_PATH}"))
-    print(ok(f"Virtual environment: {VENV_PYTHON}" if VENV_PYTHON.exists() else f"Virtual environment missing: {VENV_PYTHON}"))
+        print(warn(f'Env file missing: {ENV_PATH}'))
+    print(ok(f'Virtual environment: {VENV_PYTHON}' if VENV_PYTHON.exists() else f'Virtual environment missing: {VENV_PYTHON}'))
 
     print(info(f"Active provider: {info_payload['provider']}"))
-    print(info(f"Config source: {config_source}"))
+    print(info(f'Config source: {config_source}'))
     print(info(f"API host: {info_payload['api_host']}"))
     print(info(f"API port: {info_payload['api_port']}"))
+    capabilities = capability_summary(info_payload.get('capabilities', {}))
+    print(info(f"Search mode: {capabilities['search_mode']}"))
+    print(info(f"Supports filters: {capabilities['supports_filters']}"))
+    print(info(f"Supports rerank: {capabilities['supports_rerank']}"))
+    print(info(f"Scope inventory: {capabilities['supports_scope_inventory']}"))
+    print(info(f"Search requires scope: {capabilities['requires_scope_for_search']}"))
+    print(info(f"List requires scope: {capabilities['requires_scope_for_list']}"))
+    print(info(f"Owner-process mode: {capabilities['supports_owner_process_mode']}"))
+    print_provider_guidance(provider_guidance(info_payload['provider'], info_payload.get('capabilities', {})))
     for prerequisite in provider.prerequisite_checks():
-        if prerequisite["ok"] == "true":
+        if prerequisite['ok'] == 'true':
             print(ok(f"{prerequisite['name']}: {prerequisite['details']}"))
         else:
             print(warn(f"{prerequisite['name']}: {prerequisite['details']}"))
     for label, value in provider.doctor_rows():
-        print(info(f"{label}: {value}"))
+        print(info(f'{label}: {value}'))
 
     if VENV_PYTHON.exists():
         for dependency in provider.dependency_checks():
-            if dependency["ok"] == "true":
+            if dependency['ok'] == 'true':
                 print(ok(f"{dependency['name']} installed: {dependency['details']}"))
             else:
                 print(warn(f"{dependency['name']} is not installed in the venv"))
     else:
-        print(warn("Skipped provider dependency checks because the venv is missing"))
+        print(warn('Skipped provider dependency checks because the venv is missing'))
 
     if VENV_PYTHON.exists():
-        result = run([str(VENV_PYTHON), str(BASE_DIR / "agentmemory_cli.py"), "health"], check=False, capture_output=True, env=merged_env())
+        result = run([str(VENV_PYTHON), str(BASE_DIR / 'agentmemory_cli.py'), 'health'], check=False, capture_output=True, env=merged_env())
         if result.returncode == 0:
-            print(ok("AgentMemory health command works"))
+            print(ok('AgentMemory health command works'))
         else:
-            print(warn("AgentMemory health command failed"))
+            print(warn('AgentMemory health command failed'))
             if result.stderr.strip():
                 print(result.stderr.strip())
 
     print()
-    print(info("Suggested next commands:"))
-    print("  agentmemory configure")
-    print("  agentmemory start-api")
-    print("  agentmemory mcp-smoke")
+    print(info('Suggested next commands:'))
+    print('  /configure')
+    print('  /start')
+    print('  /mcp')
     return 0
 
 
 def command_start_api(args: argparse.Namespace) -> int:
-    heading("AgentMemory API")
-    env = merged_env({"AGENTMEMORY_API_HOST": args.host, "AGENTMEMORY_API_PORT": str(args.port)})
-    result = launcher_file(START_API, args.host, str(args.port), env=env, capture_output=False)
-    return result.returncode
+    heading('AgentMemory API')
+    ok_result, message = start_api_process(args.host, args.port)
+    print(ok(message) if ok_result else err(message))
+    return 0 if ok_result else 1
 
 
 def command_stop_api(_: argparse.Namespace) -> int:
-    heading("AgentMemory API")
-    result = launcher_file(STOP_API, env=merged_env(), capture_output=False)
-    return result.returncode
+    heading('AgentMemory API')
+    ok_result, message = stop_api_process()
+    print(ok(message) if ok_result else err(message))
+    return 0 if ok_result else 1
 
 
 def command_mcp_smoke(_: argparse.Namespace) -> int:
-    heading("AgentMemory MCP Smoke Test")
+    heading('AgentMemory MCP Smoke Test')
     if not VENV_PYTHON.exists():
-        print(err("Venv is missing. Run `agentmemory install` first."))
+        print(err('Venv is missing. Run `agentmemory install` first.'))
         return 1
     result = run([str(VENV_PYTHON), str(MCP_SMOKE)], check=False, capture_output=True, env=merged_env())
     if result.stdout.strip():
@@ -505,31 +715,36 @@ def command_mcp_smoke(_: argparse.Namespace) -> int:
 
 
 def command_snippets(_: argparse.Namespace) -> int:
-    heading("AgentMemory Snippets")
-    print(ok(f"Claude Code MCP snippet: {MCP_SNIPPET}"))
-    print(ok(f"Gemini CLI snippet: {GEMINI_SNIPPET}"))
+    heading('AgentMemory Snippets')
+    print(ok(f'Claude Code MCP snippet: {MCP_SNIPPET}'))
+    print(ok(f'Gemini CLI snippet: {GEMINI_SNIPPET}'))
     print()
-    print(info("Claude Code snippet"))
+    print(info('Claude Code snippet'))
     print(json.dumps(current_claude_code_snippet(), ensure_ascii=True, indent=2))
     print()
-    print(info("Gemini CLI snippet"))
+    print(info('Gemini CLI snippet'))
     print(json.dumps(current_gemini_snippet(), ensure_ascii=True, indent=2))
     return 0
 
 
 def command_connect_clients(_: argparse.Namespace) -> int:
-    heading("AgentMemory Client Auto-Connect")
-    result = run([str(VENV_PYTHON), str(CLIENTS_HELPER)], check=False, capture_output=True)
-    if result.stdout.strip():
-        print(result.stdout.strip())
-    if result.stderr.strip():
-        print(result.stderr.strip())
-    return result.returncode
+    heading('AgentMemory Client Auto-Connect')
+    result_code, payload, raw_output = run_clients_helper('connect')
+    if payload is not None:
+        info_payload = runtime_info()
+        payload = enrich_client_payload(payload, info_payload)
+        print(json.dumps(payload, ensure_ascii=True, indent=2))
+        print_provider_guidance(payload['provider_guidance'])
+        print_provider_guidance(payload['client_runtime_guidance'])
+        return result_code
+    if raw_output:
+        print(raw_output)
+    return result_code
 
 
 def command_disconnect_clients(_: argparse.Namespace) -> int:
-    heading("AgentMemory Client Disconnect")
-    result = run([str(VENV_PYTHON), str(CLIENTS_HELPER), "disconnect"], check=False, capture_output=True)
+    heading('AgentMemory Client Disconnect')
+    result = run([str(VENV_PYTHON), str(CLIENTS_HELPER), 'disconnect'], check=False, capture_output=True)
     if result.stdout.strip():
         print(result.stdout.strip())
     if result.stderr.strip():
@@ -538,104 +753,226 @@ def command_disconnect_clients(_: argparse.Namespace) -> int:
 
 
 def command_status_clients(args: argparse.Namespace) -> int:
-    heading("AgentMemory Client Status")
-    result_code, payload, raw_output = run_clients_helper("status")
+    heading('AgentMemory Client Status')
+    result_code, payload, raw_output = run_clients_helper('status')
     if payload is not None:
+        info_payload = runtime_info()
+        payload = enrich_client_payload(payload, info_payload)
         if args.json:
             print_status_payload(payload, as_json=True)
         elif args.compact:
             print_status_compact(payload)
+            print_provider_guidance(payload['provider_guidance'])
+            print_provider_guidance(payload['client_runtime_guidance'])
         else:
             print_status_payload(payload, as_json=False)
+            print_provider_guidance(payload['provider_guidance'])
+            print_provider_guidance(payload['client_runtime_guidance'])
     elif raw_output:
         print(raw_output)
     return result_code
 
 
 def command_doctor_clients(args: argparse.Namespace) -> int:
-    heading("AgentMemory Client Doctor")
-    result_code, payload, raw_output = run_clients_helper("doctor")
+    heading('AgentMemory Client Doctor')
+    result_code, payload, raw_output = run_clients_helper('doctor')
     if payload is not None:
+        info_payload = runtime_info()
+        payload = enrich_client_payload(payload, info_payload, include_local_server=True)
         if args.json:
             print_doctor_payload(payload, as_json=True)
         elif args.compact:
             print_doctor_compact(payload)
+            print_provider_guidance(payload['provider_guidance'])
+            print_provider_guidance(payload['client_runtime_guidance'])
         else:
             print_doctor_payload(payload, as_json=False)
+            print_provider_guidance(payload['provider_guidance'])
+            print_provider_guidance(payload['client_runtime_guidance'])
         return doctor_exit_code(payload)
     elif raw_output:
         print(raw_output)
     return result_code
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="agentmemory",
-        description="Product-style installer and operations CLI for the provider-based AgentMemory shared memory stack.",
+def command_provider_certify(args: argparse.Namespace) -> int:
+    if args.list:
+        return list_targets_json() if args.json else list_targets()
+    if not args.provider:
+        print(err('provider is required unless --list is used'))
+        return 2
+    return (
+        certification_report_json(args.provider, run_tests=args.run_tests, summary_only=args.summary_only)
+        if args.json
+        else certification_report(args.provider, run_tests=args.run_tests, summary_only=args.summary_only)
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    install_parser = subparsers.add_parser("install", help="Create or refresh the local venv and install the current provider dependencies.")
-    install_parser.add_argument("--python", help="Bootstrap Python executable to use for venv creation.")
-    install_parser.add_argument("--provider", choices=sorted(provider_registry().keys()), help="Select the active provider for the generated config.")
-    install_parser.add_argument("--api-host", help="Set the default API bind host in the runtime config.")
-    install_parser.add_argument("--api-port", type=int, help="Set the default API port in the runtime config.")
-    install_parser.add_argument("--skip-pip", action="store_true", help="Skip pip install/upgrade after ensuring the venv.")
-    install_parser.add_argument("--recreate-venv", action="store_true", help="Recreate the venv from scratch.")
-    install_parser.add_argument("--rewrite-config", action="store_true", help="Rewrite the preferred generic runtime config with defaults.")
+
+def build_parser() -> argparse.ArgumentParser:
+    runtime_defaults = runtime_info()
+    default_host = runtime_defaults.get('api_host', '127.0.0.1')
+    default_port = int(runtime_defaults.get('api_port', 8765))
+    parser = argparse.ArgumentParser(
+        prog='agentmemory',
+        description='Interactive shared-memory runtime for AI clients, with onboarding, slash commands, and automation-friendly subcommands.',
+    )
+    subparsers = parser.add_subparsers(dest='command', required=True)
+
+    install_parser = subparsers.add_parser('install', help='Create or refresh the local venv and install the current provider dependencies.')
+    install_parser.add_argument('--python', help='Bootstrap Python executable to use for venv creation.')
+    install_parser.add_argument('--provider', choices=sorted(provider_registry().keys()), help='Select the active provider for the generated config.')
+    install_parser.add_argument('--api-host', help='Set the default API bind host in the runtime config.')
+    install_parser.add_argument('--api-port', type=int, help='Set the default API port in the runtime config.')
+    install_parser.add_argument('--skip-pip', action='store_true', help='Skip pip install/upgrade after ensuring the venv.')
+    install_parser.add_argument('--recreate-venv', action='store_true', help='Recreate the venv from scratch.')
+    install_parser.add_argument('--rewrite-config', action='store_true', help='Rewrite the preferred generic runtime config with defaults.')
     install_parser.set_defaults(func=command_install)
 
-    configure_parser = subparsers.add_parser("configure", help="Update provider settings and local .env values.")
-    configure_parser.add_argument("--provider", choices=sorted(provider_registry().keys()), help="Switch the active provider and apply provider-specific settings.")
-    configure_parser.add_argument("--api-host", help="Update the default API bind host in the runtime config.")
-    configure_parser.add_argument("--api-port", type=int, help="Update the default API port in the runtime config.")
+    configure_parser = subparsers.add_parser('configure', help='Update provider settings and local .env values.')
+    configure_parser.add_argument('--provider', choices=sorted(provider_registry().keys()), help='Switch the active provider and apply provider-specific settings.')
+    configure_parser.add_argument('--api-host', help='Update the default API bind host in the runtime config.')
+    configure_parser.add_argument('--api-port', type=int, help='Update the default API port in the runtime config.')
     for provider_type in provider_registry().values():
         provider_type.configure_parser(configure_parser)
     configure_parser.set_defaults(func=command_configure)
 
-    doctor_parser = subparsers.add_parser("doctor", help="Check venv, config, key availability, and health.")
+    help_parser = subparsers.add_parser('help', help='Show interactive shell help and slash commands.')
+    help_parser.set_defaults(func=command_help)
+
+    list_scopes_parser = subparsers.add_parser('list-scopes', help='List known user, agent, and run scopes for the active provider.')
+    list_scopes_parser.add_argument('--limit', type=int, default=200)
+    list_scopes_parser.add_argument('--kind', choices=['user', 'agent', 'run'])
+    list_scopes_parser.add_argument('--query')
+    list_scopes_parser.set_defaults(func=command_list_scopes)
+
+    doctor_parser = subparsers.add_parser('doctor', help='Check venv, config, key availability, and health.')
     doctor_parser.set_defaults(func=command_doctor)
 
-    start_api_parser = subparsers.add_parser("start-api", help="Start the local shared memory HTTP API.")
-    start_api_parser.add_argument("--host", default="127.0.0.1")
-    start_api_parser.add_argument("--port", type=int, default=8765)
+    start_api_parser = subparsers.add_parser('start-api', help='Start the local shared memory HTTP API.')
+    start_api_parser.add_argument('--host', default=default_host)
+    start_api_parser.add_argument('--port', type=int, default=default_port)
     start_api_parser.set_defaults(func=command_start_api)
 
-    stop_api_parser = subparsers.add_parser("stop-api", help="Stop the local shared memory HTTP API.")
+    stop_api_parser = subparsers.add_parser('stop-api', help='Stop the local shared memory HTTP API.')
     stop_api_parser.set_defaults(func=command_stop_api)
 
-    mcp_parser = subparsers.add_parser("mcp-smoke", help="Run an MCP initialize/tools/list/tools/call smoke test.")
+    mcp_parser = subparsers.add_parser('mcp-smoke', help='Run an MCP initialize/tools/list/tools/call smoke test.')
     mcp_parser.set_defaults(func=command_mcp_smoke)
 
-    snippets_parser = subparsers.add_parser("snippets", help="Print ready-to-use Claude Code and Gemini CLI snippets.")
+    snippets_parser = subparsers.add_parser('snippets', help='Print ready-to-use Claude Code and Gemini CLI snippets.')
     snippets_parser.set_defaults(func=command_snippets)
-    connect_parser = subparsers.add_parser("connect-clients", help="Auto-connect AgentMemory to detected AI clients and editors.")
+    connect_parser = subparsers.add_parser('connect-clients', help='Auto-connect AgentMemory to detected AI clients and editors.')
     connect_parser.set_defaults(func=command_connect_clients)
-    disconnect_parser = subparsers.add_parser("disconnect-clients", help="Remove AgentMemory from supported AI clients and editors.")
+    disconnect_parser = subparsers.add_parser('disconnect-clients', help='Remove AgentMemory from supported AI clients and editors.')
     disconnect_parser.set_defaults(func=command_disconnect_clients)
-    status_parser = subparsers.add_parser("status-clients", help="Show AgentMemory connection status across supported AI clients and editors.")
+    status_parser = subparsers.add_parser('status-clients', help='Show AgentMemory connection status across supported AI clients and editors.')
     status_format = status_parser.add_mutually_exclusive_group()
-    status_format.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
-    status_format.add_argument("--table", action="store_true", help="Emit a human-readable table.")
-    status_format.add_argument("--compact", action="store_true", help="Emit a short summary table.")
+    status_format.add_argument('--json', action='store_true', help='Emit machine-readable JSON.')
+    status_format.add_argument('--table', action='store_true', help='Emit a human-readable table.')
+    status_format.add_argument('--compact', action='store_true', help='Emit a short summary table.')
     status_parser.set_defaults(func=command_status_clients)
-    doctor_clients_parser = subparsers.add_parser("doctor-clients", help="Check client detection, configuration state, and local MCP server health.")
+    doctor_clients_parser = subparsers.add_parser('doctor-clients', help='Check client detection, configuration state, and local MCP server health.')
     doctor_clients_format = doctor_clients_parser.add_mutually_exclusive_group()
-    doctor_clients_format.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
-    doctor_clients_format.add_argument("--table", action="store_true", help="Emit a human-readable table.")
-    doctor_clients_format.add_argument("--compact", action="store_true", help="Emit a short summary table.")
+    doctor_clients_format.add_argument('--json', action='store_true', help='Emit machine-readable JSON.')
+    doctor_clients_format.add_argument('--table', action='store_true', help='Emit a human-readable table.')
+    doctor_clients_format.add_argument('--compact', action='store_true', help='Emit a short summary table.')
     doctor_clients_parser.set_defaults(func=command_doctor_clients)
+
+    provider_certify_parser = subparsers.add_parser('provider-certify', help='Assess provider certification status and optionally run provider-related tests.')
+    provider_certify_parser.add_argument('provider', nargs='?', help='Provider name token, for example: localjson or mem0')
+    provider_certify_parser.add_argument('--list', action='store_true', help='List known certification targets from the provider certification registry.')
+    provider_certify_parser.add_argument('--json', action='store_true', help='Emit machine-readable JSON output.')
+    provider_certify_parser.add_argument('--run-tests', action='store_true', help='Also run the registered certification-related test modules for the provider.')
+    provider_certify_parser.add_argument('--summary-only', action='store_true', help='Show only the certification verdict and test summary without the detailed test log.')
+    provider_certify_parser.set_defaults(func=command_provider_certify)
 
     return parser
 
 
+def run_command_argv(argv: list[str]) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+def interactive_input(prompt_text: str, session=None, *, interrupt_returns_exit: bool = False) -> str:
+    try:
+        if session is not None:
+            return session.prompt(prompt_text)
+        return input(prompt_text)
+    except EOFError:
+        return '/exit'
+    except KeyboardInterrupt:
+        print()
+        return '/exit' if interrupt_returns_exit else ''
+
+
+def current_context(*, prompt_menu_enabled: bool = False) -> InteractiveContext:
+    info_payload = runtime_info()
+    return InteractiveContext(
+        config_path=CONFIG_PATH,
+        env_path=ENV_PATH,
+        venv_python=VENV_PYTHON,
+        api_host=info_payload.get('api_host', '127.0.0.1'),
+        api_port=info_payload.get('api_port', 8765),
+        provider=info_payload.get('provider', 'mem0'),
+        provider_notes=guidance_summary_lines(info_payload.get('provider', 'mem0'), info_payload.get('capabilities', {})),
+        prompt_menu_enabled=prompt_menu_enabled,
+    )
+
+
+def run_interactive_shell() -> int:
+    heading('AgentMemory')
+    session = build_prompt_session()
+    context = current_context(prompt_menu_enabled=session is not None)
+
+    if onboarding_needed(config_path=context.config_path, venv_python=context.venv_python):
+        rc = run_onboarding(
+            context,
+            prompt=lambda text: interactive_input(text, session=session, interrupt_returns_exit=True),
+            emit=print,
+            run_command=run_command_argv,
+        )
+        if rc != 0:
+            return rc
+        context = current_context(prompt_menu_enabled=session is not None)
+
+    print(render_home_screen(context))
+
+
+    while True:
+        raw = interactive_input('agentmemory> ', session=session)
+        if not raw.strip():
+            continue
+        lowered = raw.strip().lower()
+        if lowered in {'/exit', '/quit', 'exit', 'quit'}:
+            print(info('Session ended.'))
+            return 0
+
+        argv = normalize_command_line(raw)
+        if not argv:
+            continue
+
+        try:
+            rc = run_command_argv(argv)
+        except SystemExit as exc:
+            rc = int(exc.code) if isinstance(exc.code, int) else 1
+        except KeyboardInterrupt:
+            print()
+            rc = 130
+
+        if rc not in {0, None}:
+            print(warn(f'Command exited with code {rc}'))
+
+
 def main() -> int:
+    if len(sys.argv) == 1:
+        return run_interactive_shell()
     parser = build_parser()
     args = parser.parse_args()
     return args.func(args)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())
-
 

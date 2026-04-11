@@ -2,6 +2,7 @@ import os
 import unittest
 
 import agentmemory_http_client
+from memory_provider import MemoryNotFoundError, ProviderCapabilityError, ProviderScopeRequiredError, ProviderValidationError
 
 
 class AgentMemoryHttpClientTests(unittest.TestCase):
@@ -40,6 +41,156 @@ class AgentMemoryHttpClientTests(unittest.TestCase):
             self.assertFalse(agentmemory_http_client.should_proxy_to_api())
         finally:
             agentmemory_http_client.active_provider_name = original_active_provider_name  # type: ignore[assignment]
+
+    def test_proxy_list_encodes_filters_in_query_string(self) -> None:
+        original_ensure_api_running = agentmemory_http_client.ensure_api_running
+        original_request = agentmemory_http_client._request
+        captured: dict[str, object] = {}
+        try:
+            agentmemory_http_client.ensure_api_running = lambda: None  # type: ignore[assignment]
+
+            def fake_request(method: str, path: str, payload=None):
+                captured["method"] = method
+                captured["path"] = path
+                return []
+
+            agentmemory_http_client._request = fake_request  # type: ignore[assignment]
+            agentmemory_http_client.proxy_list(user_id="demo", filters={"topic": "docs"})
+        finally:
+            agentmemory_http_client.ensure_api_running = original_ensure_api_running  # type: ignore[assignment]
+            agentmemory_http_client._request = original_request  # type: ignore[assignment]
+
+        self.assertEqual(captured["method"], "GET")
+        self.assertIn("/memories?", str(captured["path"]))
+        self.assertIn("filters=", str(captured["path"]))
+
+    def test_proxy_list_scopes_encodes_query_params(self) -> None:
+        original_ensure_api_running = agentmemory_http_client.ensure_api_running
+        original_request = agentmemory_http_client._request
+        captured: dict[str, object] = {}
+        try:
+            agentmemory_http_client.ensure_api_running = lambda: None  # type: ignore[assignment]
+
+            def fake_request(method: str, path: str, payload=None):
+                captured["method"] = method
+                captured["path"] = path
+                return {"items": []}
+
+            agentmemory_http_client._request = fake_request  # type: ignore[assignment]
+            agentmemory_http_client.proxy_list_scopes(limit=25, kind="user", query="def")
+        finally:
+            agentmemory_http_client.ensure_api_running = original_ensure_api_running  # type: ignore[assignment]
+            agentmemory_http_client._request = original_request  # type: ignore[assignment]
+
+        self.assertEqual(captured["method"], "GET")
+        self.assertIn("/admin/scopes?", str(captured["path"]))
+        self.assertIn("limit=25", str(captured["path"]))
+        self.assertIn("kind=user", str(captured["path"]))
+        self.assertIn("query=def", str(captured["path"]))
+
+    def test_http_error_type_maps_to_typed_error(self) -> None:
+        original_urlopen = agentmemory_http_client.urlopen
+        try:
+            class FakeHttpError(agentmemory_http_client.HTTPError):
+                def __init__(self):
+                    super().__init__(
+                        url="http://127.0.0.1:8765/memories/missing",
+                        code=404,
+                        msg="Not Found",
+                        hdrs=None,
+                        fp=None,
+                    )
+
+                def read(self):
+                    return b'{"error":"missing","error_type":"MemoryNotFoundError"}'
+
+            def fake_urlopen(*args, **kwargs):
+                raise FakeHttpError()
+
+            agentmemory_http_client.urlopen = fake_urlopen  # type: ignore[assignment]
+
+            with self.assertRaises(MemoryNotFoundError):
+                agentmemory_http_client._request("GET", "/memories/missing")
+        finally:
+            agentmemory_http_client.urlopen = original_urlopen  # type: ignore[assignment]
+
+    def test_unknown_client_error_defaults_to_validation_for_400(self) -> None:
+        original_urlopen = agentmemory_http_client.urlopen
+        try:
+            class FakeHttpError(agentmemory_http_client.HTTPError):
+                def __init__(self):
+                    super().__init__(
+                        url="http://127.0.0.1:8765/memories",
+                        code=400,
+                        msg="Bad Request",
+                        hdrs=None,
+                        fp=None,
+                    )
+
+                def read(self):
+                    return b'{"error":"bad request"}'
+
+            def fake_urlopen(*args, **kwargs):
+                raise FakeHttpError()
+
+            agentmemory_http_client.urlopen = fake_urlopen  # type: ignore[assignment]
+
+            with self.assertRaises(ProviderValidationError):
+                agentmemory_http_client._request("GET", "/memories")
+        finally:
+            agentmemory_http_client.urlopen = original_urlopen  # type: ignore[assignment]
+
+    def test_http_error_type_maps_scope_required_to_typed_error(self) -> None:
+        original_urlopen = agentmemory_http_client.urlopen
+        try:
+            class FakeHttpError(agentmemory_http_client.HTTPError):
+                def __init__(self):
+                    super().__init__(
+                        url="http://127.0.0.1:8765/search",
+                        code=400,
+                        msg="Bad Request",
+                        hdrs=None,
+                        fp=None,
+                    )
+
+                def read(self):
+                    return b'{"error":"scope required","error_type":"ProviderScopeRequiredError"}'
+
+            def fake_urlopen(*args, **kwargs):
+                raise FakeHttpError()
+
+            agentmemory_http_client.urlopen = fake_urlopen  # type: ignore[assignment]
+
+            with self.assertRaises(ProviderScopeRequiredError):
+                agentmemory_http_client._request("POST", "/search", {"query": "demo"})
+        finally:
+            agentmemory_http_client.urlopen = original_urlopen  # type: ignore[assignment]
+
+    def test_http_error_type_maps_capability_error(self) -> None:
+        original_urlopen = agentmemory_http_client.urlopen
+        try:
+            class FakeHttpError(agentmemory_http_client.HTTPError):
+                def __init__(self):
+                    super().__init__(
+                        url="http://127.0.0.1:8765/search",
+                        code=400,
+                        msg="Bad Request",
+                        hdrs=None,
+                        fp=None,
+                    )
+
+                def read(self):
+                    return b'{"error":"unsupported rerank","error_type":"ProviderCapabilityError"}'
+
+            def fake_urlopen(*args, **kwargs):
+                raise FakeHttpError()
+
+            agentmemory_http_client.urlopen = fake_urlopen  # type: ignore[assignment]
+
+            with self.assertRaises(ProviderCapabilityError):
+                agentmemory_http_client._request("POST", "/search", {"query": "demo"})
+        finally:
+            agentmemory_http_client.urlopen = original_urlopen  # type: ignore[assignment]
 
 
 if __name__ == "__main__":

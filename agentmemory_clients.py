@@ -14,6 +14,9 @@ SERVER_NAME = "agentmemory"
 BACKUP_ROOT = BASE_DIR / "data" / "backups" / "client-configs"
 
 CODEX_CONFIG = Path.home() / ".codex" / "config.toml"
+CLAUDE_CODE_CONFIG = Path.home() / ".claude.json"
+GEMINI_SETTINGS = Path.home() / ".gemini" / "settings.json"
+QWEN_SETTINGS = Path.home() / ".qwen" / "settings.json"
 CURSOR_MCP = Path.home() / ".cursor" / "mcp.json"
 CLAUDE_DESKTOP_CONFIG = Path.home() / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json"
 VSCODE_MCP = Path.home() / "AppData" / "Roaming" / "Code" / "User" / "mcp.json"
@@ -32,15 +35,24 @@ def resolve_pwsh_command() -> str:
     return shutil.which("pwsh") or "pwsh"
 
 
-def run_pwsh(command: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [resolve_pwsh_command(), "-NoLogo", "-NoProfile", "-Command", command],
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        check=False,
-    )
+def run_pwsh(command: str, *, timeout_seconds: float | None = None) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            [resolve_pwsh_command(), "-NoLogo", "-NoProfile", "-Command", command],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(
+            args=exc.cmd,
+            returncode=124,
+            stdout=exc.stdout or "",
+            stderr=(exc.stderr or "") + "\nCommand timed out.",
+        )
 
 
 def command_result(label: str, completed: subprocess.CompletedProcess[str]) -> dict[str, Any]:
@@ -88,6 +100,81 @@ def stdio_server_config() -> dict[str, Any]:
             "-File",
             str(RUN_MCP).replace("\\", "/"),
         ],
+    }
+
+
+def expected_launcher_path() -> str:
+    return str(RUN_MCP).replace("\\", "/")
+
+
+def normalize_launcher_path(value: str | None) -> str | None:
+    if not value:
+        return value
+    normalized = value.replace("\\", "/")
+    normalized = re.sub(r"^([A-Za-z]:)/+", r"\1/", normalized)
+    normalized = re.sub(r"(?<!:)/{2,}", "/", normalized)
+    return normalized
+
+
+def config_server_details(root: dict[str, Any], server_name: str) -> dict[str, Any]:
+    if not isinstance(root, dict) or server_name not in root:
+        return {}
+    server = root.get(server_name)
+    if not isinstance(server, dict):
+        return {"raw": server}
+
+    args = server.get("args")
+    launcher = ""
+    if isinstance(args, list):
+        for value in args:
+            if isinstance(value, str) and value.lower().endswith(".ps1"):
+                launcher = value.replace("\\", "/")
+                break
+
+    launcher = normalize_launcher_path(launcher)
+    expected = normalize_launcher_path(expected_launcher_path())
+    stale = bool(launcher) and launcher != expected
+    return {
+        "command": server.get("command"),
+        "args": args if isinstance(args, list) else None,
+        "launcher": launcher or None,
+        "expected_launcher": expected,
+        "stale_launcher": stale,
+    }
+
+
+def text_config_status(path: Path, target: str, *, kind: str = "cli") -> dict[str, Any]:
+    if not path.exists():
+        return {
+            "target": target,
+            "kind": kind,
+            "connected": False,
+            "configured": False,
+            "details": "not detected",
+            "path": str(path),
+            "health": "not_detected",
+        }
+
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    configured = SERVER_NAME in raw
+    launcher_match = re.search(r"([A-Za-z]:[/\\\\].*?run-(?:agentmemory|mem0)-mcp\.ps1)", raw, re.IGNORECASE)
+    launcher = normalize_launcher_path(launcher_match.group(1) if launcher_match else None)
+    expected = normalize_launcher_path(expected_launcher_path())
+    stale = bool(launcher) and launcher != expected
+    health = "configured" if configured else "not_configured"
+    if configured and stale:
+        health = "stale_config"
+    return {
+        "target": target,
+        "kind": kind,
+        "connected": False,
+        "configured": configured,
+        "details": "configured" if configured else "not configured",
+        "path": str(path),
+        "health": health,
+        "launcher": launcher,
+        "expected_launcher": expected,
+        "stale_launcher": stale,
     }
 
 
@@ -150,26 +237,45 @@ def remove_only(label: str, remove_cmd: str) -> dict[str, Any]:
 
 def config_status(path: Path, root_key: str, target: str) -> dict[str, Any]:
     if not path.exists():
-        return {"target": target, "connected": False, "details": "not detected", "path": str(path)}
+        return {
+            "target": target,
+            "kind": "config",
+            "connected": False,
+            "configured": False,
+            "details": "not detected",
+            "path": str(path),
+            "health": "not_detected",
+        }
     payload = load_json(path, {root_key: {}})
     root = payload.get(root_key, {})
     connected = isinstance(root, dict) and SERVER_NAME in root
+    server_details = config_server_details(root, SERVER_NAME)
+    health = "configured" if connected else "not_configured"
+    if connected and server_details.get("stale_launcher"):
+        health = "stale_config"
     return {
         "target": target,
+        "kind": "config",
         "connected": connected,
+        "configured": connected,
         "details": "configured" if connected else "not configured",
         "path": str(path),
+        "health": health,
+        **server_details,
     }
 
 
-def cli_status(label: str, command: str) -> dict[str, Any]:
-    result = run_pwsh(command)
+def cli_status(label: str, command: str, *, timeout_seconds: float | None = None) -> dict[str, Any]:
+    result = run_pwsh(command, timeout_seconds=timeout_seconds)
     output = normalize_display_text((result.stdout or "") + ("\n" + result.stderr if result.stderr else ""))
     connected = result.returncode == 0 and SERVER_NAME in output
+    health = "connected" if connected else ("timeout" if result.returncode == 124 else ("not_configured" if output else "unknown"))
     return {
         "target": label,
         "kind": "cli",
         "connected": connected,
+        "configured": connected,
+        "health": health,
         "details": output,
     }
 
@@ -181,9 +287,11 @@ def cli_detected(command_name: str) -> bool:
 
 def config_doctor(path: Path, root_key: str, target: str) -> dict[str, Any]:
     status = config_status(path, root_key, target)
-    status["kind"] = "config"
     status["detected"] = path.exists() or path.parent.exists()
-    status["health"] = "configured" if status["connected"] else ("not_detected" if status["details"] == "not detected" else "not_configured")
+    if not status["detected"]:
+        status["health"] = "not_detected"
+    elif not status["configured"]:
+        status["health"] = "not_configured"
     return status
 
 
@@ -431,6 +539,27 @@ def status_all() -> dict[str, Any]:
         config_status(CLAUDE_DESKTOP_CONFIG, "mcpServers", "claude-desktop"),
         cli_status("gemini-cli", "& gemini.ps1 mcp list"),
         cli_status("qwen-cli", "& qwen.ps1 mcp list"),
+        config_status(CURSOR_MCP, "mcpServers", "cursor"),
+        config_status(VSCODE_MCP, "servers", "copilot-vscode"),
+        config_status(ROO_MCP, "mcpServers", "roo-code"),
+        config_status(KILO_MCP, "mcpServers", "kilocode"),
+        config_status(CLINE_VSCODE_MCP, "mcpServers", "cline"),
+    ]
+    if not CLINE_VSCODE_MCP.exists() and CLINE_CURSOR_MCP.exists():
+        results[-1] = config_status(CLINE_CURSOR_MCP, "mcpServers", "cline")
+    return {
+        "server_name": SERVER_NAME,
+        "results": results,
+    }
+
+
+def console_status_all() -> dict[str, Any]:
+    results = [
+        text_config_status(CODEX_CONFIG, "codex"),
+        text_config_status(CLAUDE_CODE_CONFIG, "claude-code"),
+        config_status(CLAUDE_DESKTOP_CONFIG, "mcpServers", "claude-desktop"),
+        text_config_status(GEMINI_SETTINGS, "gemini-cli"),
+        text_config_status(QWEN_SETTINGS, "qwen-cli"),
         config_status(CURSOR_MCP, "mcpServers", "cursor"),
         config_status(VSCODE_MCP, "servers", "copilot-vscode"),
         config_status(ROO_MCP, "mcpServers", "roo-code"),

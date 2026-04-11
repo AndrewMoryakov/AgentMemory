@@ -40,6 +40,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
 
         self.assertEqual(payload["provider"], "mem0")
         self.assertEqual(payload["config_source"], "generic")
+        self.assertIn("capabilities", payload)
         self.assertIn("llm_model", payload)
         self.assertIn("embedding_model", payload)
 
@@ -90,6 +91,14 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
 
     def test_provider_registry_contains_second_test_provider(self) -> None:
         self.assertIn("localjson", agentmemory_runtime.provider_registry())
+        self.assertIn("mem0", agentmemory_runtime.provider_registry())
+
+    def test_provider_class_exposes_certification_metadata(self) -> None:
+        metadata = agentmemory_runtime.provider_class("mem0").provider_metadata()
+
+        self.assertEqual(metadata["provider_name"], "mem0")
+        self.assertEqual(metadata["certification_status"], "certified")
+        self.assertEqual(metadata["expected_certification_status_code"], "certified_with_skips")
 
     def test_runtime_can_use_localjson_provider(self) -> None:
         config = agentmemory_runtime.default_runtime_config()
@@ -104,6 +113,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["provider"], "localjson")
         self.assertIn("storage_path", payload)
+        self.assertTrue(payload["capabilities"]["supports_text_search"])
 
     def test_runtime_info_uses_updated_api_host_and_port(self) -> None:
         config = agentmemory_runtime.default_runtime_config()
@@ -115,6 +125,30 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
 
         self.assertEqual(payload["api_host"], "0.0.0.0")
         self.assertEqual(payload["api_port"], 9876)
+
+    def test_active_provider_capabilities_match_runtime_info(self) -> None:
+        config = agentmemory_runtime.default_runtime_config()
+        config["runtime"]["provider"] = "localjson"
+        config["providers"]["localjson"] = agentmemory_runtime.provider_class("localjson").default_provider_config(
+            runtime_dir=self.temp_dir.name
+        )
+        agentmemory_runtime.write_runtime_config(config)
+
+        self.assertEqual(agentmemory_runtime.active_provider_capabilities(), agentmemory_runtime.runtime_info()["capabilities"])
+
+    def test_memory_list_scopes_uses_active_provider(self) -> None:
+        config = agentmemory_runtime.default_runtime_config()
+        config["runtime"]["provider"] = "localjson"
+        config["providers"]["localjson"] = agentmemory_runtime.provider_class("localjson").default_provider_config(
+            runtime_dir=self.temp_dir.name
+        )
+        agentmemory_runtime.write_runtime_config(config)
+
+        agentmemory_runtime.memory_add(messages=[{"role": "user", "content": "hello"}], user_id="default")
+        payload = agentmemory_runtime.memory_list_scopes()
+
+        self.assertEqual(payload["provider"], "localjson")
+        self.assertEqual(payload["totals"]["users"], 1)
 
 
 if __name__ == "__main__":

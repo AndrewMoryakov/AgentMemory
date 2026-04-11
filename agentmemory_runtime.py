@@ -7,8 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from localjson_provider import LocalJsonProvider
-from mem0_provider import ConfigurationError, Mem0Provider
-from memory_provider import BaseMemoryProvider
+from mem0_provider import Mem0Provider
+from memory_provider import (
+    BaseMemoryProvider,
+    MemoryRecord,
+    ProviderCapabilities,
+    ProviderConfigurationError,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -95,7 +100,7 @@ def provider_registry() -> dict[str, type[BaseMemoryProvider]]:
 def provider_class(provider_name: str) -> type[BaseMemoryProvider]:
     registry = provider_registry()
     if provider_name not in registry:
-        raise ConfigurationError(f"Unknown memory provider: {provider_name}")
+        raise ProviderConfigurationError(f"Unknown memory provider: {provider_name}")
     return registry[provider_name]
 
 
@@ -141,6 +146,10 @@ def active_provider_name() -> str:
     return config["runtime"]["provider"]
 
 
+def active_provider_capabilities() -> ProviderCapabilities:
+    return get_provider().capabilities()
+
+
 def runtime_info() -> dict[str, Any]:
     config, source, config_path = load_runtime_config_with_source()
     provider = get_provider()
@@ -153,6 +162,7 @@ def runtime_info() -> dict[str, Any]:
         "api_host": current_api_host(),
         "api_port": current_api_port(),
         "provider": active_provider_name(),
+        "capabilities": active_provider_capabilities(),
         "config_source": source,
         **provider.runtime_info(),
     }
@@ -197,7 +207,7 @@ def memory_list(*, user_id=None, agent_id=None, run_id=None, limit=100, filters=
     )
 
 
-def memory_get(memory_id):
+def memory_get(memory_id) -> MemoryRecord:
     return get_provider().get_memory(memory_id)
 
 
@@ -207,3 +217,7 @@ def memory_update(*, memory_id, data, metadata=None):
 
 def memory_delete(*, memory_id):
     return get_provider().delete_memory(memory_id=memory_id)
+
+
+def memory_list_scopes(*, limit: int = 200, kind: str | None = None, query: str | None = None):
+    return get_provider().list_scopes(limit=limit, kind=kind, query=query)

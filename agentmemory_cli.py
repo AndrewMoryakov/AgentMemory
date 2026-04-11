@@ -2,26 +2,9 @@ import argparse
 import json
 import sys
 
-from agentmemory_http_client import (
-    proxy_add,
-    proxy_delete,
-    proxy_get,
-    proxy_health,
-    proxy_list,
-    proxy_search,
-    proxy_update,
-    should_proxy_to_api,
-)
-from agentmemory_runtime import (
-    ConfigurationError,
-    health,
-    memory_add,
-    memory_delete,
-    memory_get,
-    memory_list,
-    memory_search,
-    memory_update,
-)
+from agentmemory_operation_adapters import cli_operation_source
+from agentmemory_operations import OPERATIONS
+from memory_provider import ProviderError, ProviderValidationError
 
 
 def print_json(data):
@@ -29,7 +12,12 @@ def print_json(data):
 
 
 def parse_metadata(raw):
-    return json.loads(raw) if raw else None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ProviderValidationError(f"Invalid JSON: {exc.msg}") from exc
 
 
 def main() -> int:
@@ -37,6 +25,11 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("health")
+
+    list_scopes_parser = subparsers.add_parser("list-scopes")
+    list_scopes_parser.add_argument("--limit", type=int, default=200)
+    list_scopes_parser.add_argument("--kind", choices=["user", "agent", "run"])
+    list_scopes_parser.add_argument("--query")
 
     add_parser = subparsers.add_parser("add")
     add_parser.add_argument("--user-id")
@@ -79,58 +72,34 @@ def main() -> int:
 
     try:
         if args.command == "health":
-            print_json(proxy_health() if should_proxy_to_api() else health())
+            print_json(OPERATIONS["health"].execute(cli_operation_source("health", args, parse_json_arg=parse_metadata)))
             return 0
         if args.command == "add":
-            messages = [{"role": "user", "content": text} for text in args.message]
-            kwargs = {
-                "messages": messages,
-                "user_id": args.user_id,
-                "agent_id": args.agent_id,
-                "run_id": args.run_id,
-                "metadata": parse_metadata(args.metadata),
-                "infer": not args.no_infer,
-                "memory_type": args.memory_type,
-            }
-            result = proxy_add(**kwargs) if should_proxy_to_api() else memory_add(**kwargs)
+            result = OPERATIONS["add"].execute(cli_operation_source("add", args, parse_json_arg=parse_metadata))
+            print_json(result)
+            return 0
+        if args.command == "list-scopes":
+            result = OPERATIONS["list_scopes"].execute(cli_operation_source("list-scopes", args, parse_json_arg=parse_metadata))
             print_json(result)
             return 0
         if args.command == "search":
-            kwargs = {
-                "query": args.query,
-                "user_id": args.user_id,
-                "agent_id": args.agent_id,
-                "run_id": args.run_id,
-                "limit": args.limit,
-                "filters": parse_metadata(args.filters),
-                "threshold": args.threshold,
-                "rerank": not args.no_rerank,
-            }
-            result = proxy_search(**kwargs) if should_proxy_to_api() else memory_search(**kwargs)
+            result = OPERATIONS["search"].execute(cli_operation_source("search", args, parse_json_arg=parse_metadata))
             print_json(result)
             return 0
         if args.command == "list":
-            kwargs = {
-                "user_id": args.user_id,
-                "agent_id": args.agent_id,
-                "run_id": args.run_id,
-                "limit": args.limit,
-                "filters": parse_metadata(args.filters),
-            }
-            result = proxy_list(**kwargs) if should_proxy_to_api() else memory_list(**kwargs)
+            result = OPERATIONS["list"].execute(cli_operation_source("list", args, parse_json_arg=parse_metadata))
             print_json(result)
             return 0
         if args.command == "get":
-            print_json(proxy_get(args.memory_id) if should_proxy_to_api() else memory_get(args.memory_id))
+            print_json(OPERATIONS["get"].execute(cli_operation_source("get", args, parse_json_arg=parse_metadata)))
             return 0
         if args.command == "update":
-            kwargs = {"memory_id": args.memory_id, "data": args.data, "metadata": parse_metadata(args.metadata)}
-            print_json(proxy_update(**kwargs) if should_proxy_to_api() else memory_update(**kwargs))
+            print_json(OPERATIONS["update"].execute(cli_operation_source("update", args, parse_json_arg=parse_metadata)))
             return 0
         if args.command == "delete":
-            print_json(proxy_delete(memory_id=args.memory_id) if should_proxy_to_api() else memory_delete(memory_id=args.memory_id))
+            print_json(OPERATIONS["delete"].execute(cli_operation_source("delete", args, parse_json_arg=parse_metadata)))
             return 0
-    except ConfigurationError as exc:
+    except ProviderError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 

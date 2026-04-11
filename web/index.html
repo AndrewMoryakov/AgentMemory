@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentMemory Console</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <p class="eyebrow">AgentMemory</p>
+        <h1>Shared memory workspace</h1>
+        <p class="lede">Review one memory context at a time, keep high-signal records visible, and understand what your connected tools are pointing at.</p>
+      </div>
+
+      <section class="sidebar-panel sidebar-runtime">
+        <div class="sidebar-panel-head">
+          <span class="panel-kicker">Runtime</span>
+          <div id="runtime-pill" class="runtime-pill">Loading...</div>
+        </div>
+        <button id="refresh-overview" class="button button-primary button-block">Refresh workspace</button>
+        <div id="overview-callout" class="notice notice-info hidden"></div>
+      </section>
+
+      <section class="sidebar-panel">
+        <div class="sidebar-panel-head">
+          <span class="panel-kicker">Overview</span>
+        </div>
+        <div id="scope-summary" class="scope-summary hidden"></div>
+        <div class="stats-stack" id="stats-grid"></div>
+      </section>
+
+      <section class="sidebar-panel">
+        <div class="sidebar-panel-head">
+          <span class="panel-kicker">Integrations</span>
+          <p class="panel-copy">Connected means a live MCP handshake. Configured means the client is wired up, but not live-checked from this view.</p>
+        </div>
+        <div class="notice notice-neutral">If a client points to the wrong launcher, it appears as <strong>Stale config</strong>.</div>
+        <div id="client-list" class="client-list"></div>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <header class="workspace-header">
+        <div>
+          <p class="eyebrow">Explorer</p>
+          <h2>Find and inspect stored memory</h2>
+          <p class="lede">The main workflow is simple: search first, then narrow the workspace to a user, agent, or run when the active provider requires a defined scope.</p>
+        </div>
+      </header>
+
+      <section class="command-bar">
+        <form id="search-form" class="search-shell">
+          <div class="search-row">
+            <input id="query" name="query" type="search" placeholder="Search memory text or semantic matches">
+            <button class="button button-primary" type="submit">Search</button>
+            <button class="button" type="button" id="reset-search">Reset</button>
+          </div>
+
+          <details class="control-drawer">
+            <summary>Scope and filters</summary>
+            <div class="control-drawer-body">
+              <div class="control-grid">
+                <label class="field">
+                  <span class="field-label">User</span>
+                  <input id="user_id" name="user_id" type="text" placeholder="user_id">
+                </label>
+                <label class="field">
+                  <span class="field-label">Agent</span>
+                  <input id="agent_id" name="agent_id" type="text" placeholder="agent_id">
+                </label>
+                <label class="field">
+                  <span class="field-label">Run</span>
+                  <input id="run_id" name="run_id" type="text" placeholder="run_id">
+                </label>
+              </div>
+
+              <div class="drawer-foot">
+                <label class="checkbox">
+                  <input id="pinned_only" name="pinned_only" type="checkbox">
+                  <span>Pinned only</span>
+                </label>
+                <div class="scope-actions">
+                  <button class="chip-button" type="button" data-scope-field="user_id" data-scope-value="demo-user">Try demo user</button>
+                  <button class="chip-button" type="button" data-scope-field="agent_id" data-scope-value="coding-agent">Try demo agent</button>
+                  <button class="chip-button" type="button" data-scope-field="run_id" data-scope-value="session-001">Try demo run</button>
+                  <button class="chip-button chip-button-muted" type="button" id="copy-link">Copy link</button>
+                  <button class="chip-button chip-button-muted" type="button" id="clear-scope">Clear scope</button>
+                </div>
+              </div>
+            </div>
+          </details>
+        </form>
+      </section>
+
+      <div id="active-scope" class="active-scope hidden"></div>
+      <div id="explorer-callout" class="notice notice-info hidden"></div>
+
+      <section class="workspace-grid">
+        <section class="results-pane">
+          <div class="pane-head">
+            <div>
+              <h3>Records</h3>
+              <p class="pane-copy">Search results and scoped records appear here.</p>
+            </div>
+          </div>
+          <div id="explorer-empty" class="empty-state hidden"></div>
+          <div id="memory-list" class="memory-list"></div>
+        </section>
+
+        <aside class="detail-pane">
+          <div class="pane-head">
+            <div>
+              <h3>Detail</h3>
+              <p class="pane-copy">Inspect one record, adjust metadata, and keep important memory pinned.</p>
+            </div>
+          </div>
+
+          <div id="detail-empty" class="empty-state">Select a memory to inspect, edit, pin, or delete it.</div>
+
+          <form id="detail-form" class="detail-form hidden">
+            <label class="field">
+              <span class="field-label">Stored memory</span>
+              <textarea id="detail-memory" rows="8"></textarea>
+            </label>
+
+            <label class="field">
+              <span class="field-label">Metadata</span>
+              <small class="field-hint">Advanced provider metadata. Keep this compact and valid JSON.</small>
+              <textarea id="detail-metadata" rows="8"></textarea>
+            </label>
+
+            <div class="detail-actions">
+              <label class="checkbox">
+                <input id="detail-pinned" type="checkbox">
+                <span>Pinned</span>
+              </label>
+              <button class="button button-primary" type="submit">Save</button>
+              <button class="button button-danger" type="button" id="delete-memory">Delete</button>
+            </div>
+
+            <pre id="detail-meta" class="detail-meta"></pre>
+          </form>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <script src="/ui/app.js" defer></script>
+</body>
+</html>

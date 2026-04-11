@@ -10,7 +10,12 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from agentmemory_platform import launcher_command, launcher_path
-from agentmemory_runtime import BASE_DIR, ConfigurationError, active_provider_name, current_api_host, current_api_port
+from agentmemory_runtime import BASE_DIR, active_provider_name, current_api_host, current_api_port
+from agentmemory_transport import error_class_for_type
+from memory_provider import (
+    ProviderError,
+    ProviderUnavailableError,
+)
 
 
 OWNER_ENV = "AGENTMEMORY_OWNER_PROCESS"
@@ -40,13 +45,16 @@ def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> A
     except HTTPError as exc:
         body = exc.read()
         try:
-            payload = json.loads(body.decode("utf-8"))
-            message = payload.get("error", str(exc))
+            response_payload = json.loads(body.decode("utf-8"))
+            message = response_payload.get("error", str(exc))
+            error_type = response_payload.get("error_type", "")
         except Exception:
             message = str(exc)
-        raise ConfigurationError(message) from exc
+            error_type = ""
+        error_type_cls = error_class_for_type(error_type, status_code=exc.code)
+        raise error_type_cls(message) from exc
     except URLError as exc:
-        raise ConfigurationError(f"AgentMemory API is not reachable at {api_base_url()}. Start it with `agentmemory start-api`.") from exc
+        raise ProviderUnavailableError(f"AgentMemory API is not reachable at {api_base_url()}. Start it with `agentmemory start-api`.") from exc
 
     if not body:
         return {}
@@ -56,7 +64,7 @@ def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> A
 def api_is_healthy() -> bool:
     try:
         payload = _request("GET", "/health")
-    except ConfigurationError:
+    except ProviderError:
         return False
     return bool(payload.get("ok"))
 
@@ -83,7 +91,7 @@ def ensure_api_running() -> None:
             return
         time.sleep(0.5)
 
-    raise ConfigurationError(f"AgentMemory API did not become ready at {api_base_url()} within {API_START_TIMEOUT_SECONDS:.0f}s")
+    raise ProviderUnavailableError(f"AgentMemory API did not become ready at {api_base_url()} within {API_START_TIMEOUT_SECONDS:.0f}s")
 
 
 def proxy_health() -> dict[str, Any]:
@@ -128,23 +136,24 @@ def proxy_search(*, query, user_id=None, agent_id=None, run_id=None, limit=10, f
 
 def proxy_list(*, user_id=None, agent_id=None, run_id=None, limit=100, filters=None):
     ensure_api_running()
+    query_payload: dict[str, Any] = {
+        "user_id": user_id,
+        "agent_id": agent_id,
+        "run_id": run_id,
+        "limit": limit,
+    }
+    if filters is not None:
+        query_payload["filters"] = json.dumps(filters, ensure_ascii=True, separators=(",", ":"))
     query = urlencode(
         {
             key: value
-            for key, value in {
-                "user_id": user_id,
-                "agent_id": agent_id,
-                "run_id": run_id,
-                "limit": limit,
-            }.items()
+            for key, value in query_payload.items()
             if value is not None
         }
     )
     path = "/memories"
     if query:
         path = f"{path}?{query}"
-    if filters:
-        raise ConfigurationError("Filtering through the Mem0 API proxy is not implemented for list yet.")
     return _request("GET", path)
 
 
@@ -161,3 +170,13 @@ def proxy_update(*, memory_id, data, metadata=None):
 def proxy_delete(*, memory_id):
     ensure_api_running()
     return _request("DELETE", f"/memories/{memory_id}")
+
+
+def proxy_list_scopes(*, limit: int = 200, kind: str | None = None, query: str | None = None):
+    ensure_api_running()
+    query_payload: dict[str, Any] = {"limit": limit, "kind": kind, "query": query}
+    encoded = urlencode({key: value for key, value in query_payload.items() if value is not None})
+    path = "/admin/scopes"
+    if encoded:
+        path = f"{path}?{encoded}"
+    return _request("GET", path)

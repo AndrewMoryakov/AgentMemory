@@ -7,7 +7,17 @@ from threading import Lock
 from typing import Any
 from uuid import uuid4
 
-from memory_provider import BaseMemoryProvider
+from memory_provider import (
+    BaseMemoryProvider,
+    DeleteResult,
+    MemoryNotFoundError,
+    MemoryRecord,
+    ProviderCapabilityError,
+    ProviderCapabilities,
+    ProviderValidationError,
+    ScopeInventory,
+    ScopeInventoryItem,
+)
 
 
 def utc_now() -> str:
@@ -17,6 +27,10 @@ def utc_now() -> str:
 class LocalJsonProvider(BaseMemoryProvider):
     provider_name = "localjson"
     display_name = "Local JSON"
+    summary = "Built-in local JSON provider used for contract validation and local demos."
+    certification_status = "certified"
+    expected_certification_status_code = "certified"
+    certification_notes = "Built-in validation provider must stay fully certified."
 
     @classmethod
     def default_provider_config(cls, *, runtime_dir: str) -> dict[str, Any]:
@@ -41,6 +55,22 @@ class LocalJsonProvider(BaseMemoryProvider):
     def __init__(self, *, runtime_config: dict[str, Any], provider_config: dict[str, Any]) -> None:
         super().__init__(runtime_config=runtime_config, provider_config=provider_config)
         self._lock = Lock()
+
+    def capabilities(self) -> ProviderCapabilities:
+        return {
+            "supports_semantic_search": False,
+            "supports_text_search": True,
+            "supports_filters": True,
+            "supports_metadata_filters": True,
+            "supports_rerank": False,
+            "supports_update": True,
+            "supports_delete": True,
+            "supports_scopeless_list": True,
+            "requires_scope_for_list": False,
+            "requires_scope_for_search": False,
+            "supports_owner_process_mode": False,
+            "supports_scope_inventory": True,
+        }
 
     @property
     def storage_path(self) -> Path:
@@ -103,8 +133,47 @@ class LocalJsonProvider(BaseMemoryProvider):
         overlap = len(query_tokens & text_tokens)
         return overlap / len(query_tokens)
 
-    def _public_record(self, record: dict[str, Any]) -> dict[str, Any]:
-        return dict(record)
+    def _public_record(self, record: dict[str, Any]) -> MemoryRecord:
+        return {
+            "id": str(record.get("id", "")),
+            "memory": str(record.get("memory", "")),
+            "metadata": dict(record.get("metadata") or {}),
+            "user_id": record.get("user_id"),
+            "agent_id": record.get("agent_id"),
+            "run_id": record.get("run_id"),
+            "memory_type": record.get("memory_type"),
+            "created_at": record.get("created_at"),
+            "updated_at": record.get("updated_at"),
+            "provider": self.provider_name,
+            **({"score": record["score"]} if "score" in record else {}),
+            **({"raw": record["raw"]} if "raw" in record else {}),
+        }
+
+    def _scope_inventory(self, *, kind: str | None = None, query: str | None = None) -> list[ScopeInventoryItem]:
+        kind_map = {"user": "user_id", "agent": "agent_id", "run": "run_id"}
+        selected_kinds = [kind] if kind else ["user", "agent", "run"]
+        query_l = query.lower() if query else None
+        buckets: dict[tuple[str, str], ScopeInventoryItem] = {}
+
+        for record in self._load_all():
+            for selected in selected_kinds:
+                field_name = kind_map[selected]
+                value = record.get(field_name)
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                if query_l and query_l not in value.lower():
+                    continue
+                key = (selected, value)
+                item = buckets.setdefault(
+                    key,
+                    {"kind": selected, "value": value, "count": 0, "last_seen_at": None},
+                )
+                item["count"] += 1
+                timestamp = record.get("updated_at") or record.get("created_at")
+                if isinstance(timestamp, str) and timestamp and (item["last_seen_at"] is None or timestamp > item["last_seen_at"]):
+                    item["last_seen_at"] = timestamp
+
+        return sorted(buckets.values(), key=lambda item: (item["kind"], -item["count"], item["value"]))
 
     def doctor_rows(self) -> list[tuple[str, str]]:
         return [
@@ -128,7 +197,7 @@ class LocalJsonProvider(BaseMemoryProvider):
             "default_limit": int(self.provider_config.get("default_limit", 100)),
         }
 
-    def add_memory(self, *, messages, user_id=None, agent_id=None, run_id=None, metadata=None, infer=True, memory_type=None):
+    def add_memory(self, *, messages, user_id=None, agent_id=None, run_id=None, metadata=None, infer=True, memory_type=None) -> MemoryRecord:
         text = self._normalized_messages(messages)
         record = {
             "id": str(uuid4()),
@@ -148,8 +217,9 @@ class LocalJsonProvider(BaseMemoryProvider):
             self._save_all(records)
         return self._public_record(record)
 
-    def search_memory(self, *, query, user_id=None, agent_id=None, run_id=None, limit=10, filters=None, threshold=None, rerank=True):
-        del rerank
+    def search_memory(self, *, query, user_id=None, agent_id=None, run_id=None, limit=10, filters=None, threshold=None, rerank=True) -> list[MemoryRecord]:
+        if rerank:
+            raise ProviderCapabilityError("Local JSON provider does not support rerank.")
         results: list[dict[str, Any]] = []
         with self._lock:
             for record in self._load_all():
@@ -168,7 +238,7 @@ class LocalJsonProvider(BaseMemoryProvider):
         results.sort(key=lambda item: item.get("score", 0.0), reverse=True)
         return results[:limit]
 
-    def list_memories(self, *, user_id=None, agent_id=None, run_id=None, limit=100, filters=None):
+    def list_memories(self, *, user_id=None, agent_id=None, run_id=None, limit=100, filters=None) -> list[MemoryRecord]:
         with self._lock:
             records = [
                 self._public_record(record)
@@ -183,9 +253,9 @@ class LocalJsonProvider(BaseMemoryProvider):
             for record in self._load_all():
                 if record.get("id") == memory_id:
                     return self._public_record(record)
-        raise KeyError(memory_id)
+        raise MemoryNotFoundError(memory_id)
 
-    def update_memory(self, *, memory_id, data, metadata=None):
+    def update_memory(self, *, memory_id, data, metadata=None) -> MemoryRecord:
         with self._lock:
             records = self._load_all()
             for record in records:
@@ -196,13 +266,26 @@ class LocalJsonProvider(BaseMemoryProvider):
                     record["updated_at"] = utc_now()
                     self._save_all(records)
                     return self._public_record(record)
-        raise KeyError(memory_id)
+        raise MemoryNotFoundError(memory_id)
 
-    def delete_memory(self, *, memory_id):
+    def delete_memory(self, *, memory_id) -> DeleteResult:
         with self._lock:
             records = self._load_all()
             remaining = [record for record in records if record.get("id") != memory_id]
             if len(remaining) == len(records):
-                raise KeyError(memory_id)
+                raise MemoryNotFoundError(memory_id)
             self._save_all(remaining)
-        return {"id": memory_id, "deleted": True}
+        return {"id": memory_id, "deleted": True, "provider": self.provider_name}
+
+    def list_scopes(self, *, limit: int = 200, kind: str | None = None, query: str | None = None) -> ScopeInventory:
+        if kind not in {None, "user", "agent", "run"}:
+            raise ProviderValidationError("Scope kind must be one of: user, agent, run.")
+        with self._lock:
+            all_items = self._scope_inventory(kind=None, query=query)
+            items = self._scope_inventory(kind=kind, query=query)
+        totals = {
+            "users": sum(1 for item in all_items if item["kind"] == "user"),
+            "agents": sum(1 for item in all_items if item["kind"] == "agent"),
+            "runs": sum(1 for item in all_items if item["kind"] == "run"),
+        }
+        return {"provider": self.provider_name, "items": items[:limit], "totals": totals}
