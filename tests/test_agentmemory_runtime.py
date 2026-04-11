@@ -41,6 +41,8 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["provider"], "mem0")
         self.assertEqual(payload["config_source"], "generic")
         self.assertIn("capabilities", payload)
+        self.assertIn("runtime_policy", payload)
+        self.assertEqual(payload["runtime_policy"]["transport_mode"], "owner_process_proxy")
         self.assertIn("llm_model", payload)
         self.assertIn("embedding_model", payload)
 
@@ -53,6 +55,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["provider"], "mem0")
         self.assertEqual(payload["config_source"], "generic")
+        self.assertEqual(payload["runtime_policy"]["transport_mode"], "owner_process_proxy")
 
     def test_write_runtime_config_writes_json_file(self) -> None:
         generic = agentmemory_runtime.default_runtime_config()
@@ -114,6 +117,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["provider"], "localjson")
         self.assertIn("storage_path", payload)
         self.assertTrue(payload["capabilities"]["supports_text_search"])
+        self.assertEqual(payload["runtime_policy"]["transport_mode"], "direct")
 
     def test_runtime_info_uses_updated_api_host_and_port(self) -> None:
         config = agentmemory_runtime.default_runtime_config()
@@ -135,6 +139,16 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         agentmemory_runtime.write_runtime_config(config)
 
         self.assertEqual(agentmemory_runtime.active_provider_capabilities(), agentmemory_runtime.runtime_info()["capabilities"])
+
+    def test_active_provider_runtime_policy_matches_runtime_info(self) -> None:
+        config = agentmemory_runtime.default_runtime_config()
+        config["runtime"]["provider"] = "localjson"
+        config["providers"]["localjson"] = agentmemory_runtime.provider_class("localjson").default_provider_config(
+            runtime_dir=self.temp_dir.name
+        )
+        agentmemory_runtime.write_runtime_config(config)
+
+        self.assertEqual(agentmemory_runtime.active_provider_runtime_policy(), agentmemory_runtime.runtime_info()["runtime_policy"])
 
     def test_memory_list_scopes_uses_active_provider(self) -> None:
         config = agentmemory_runtime.default_runtime_config()

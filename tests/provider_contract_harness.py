@@ -108,6 +108,12 @@ class ProviderContractHarness(ABC):
         }
         self.assertEqual(set(capabilities.keys()), expected_keys)
 
+    def test_runtime_policy_exposes_transport_mode_contract(self) -> None:
+        runtime_policy = self.provider.runtime_policy()
+
+        self.assertEqual(set(runtime_policy.keys()), {"transport_mode"})
+        self.assertIn(runtime_policy["transport_mode"], {"direct", "owner_process_proxy", "remote_only"})
+
     def test_list_scopes_returns_canonical_inventory_shape(self) -> None:
         self.create_memory("prefers brutalist layouts")
         inventory = self.provider.list_scopes()

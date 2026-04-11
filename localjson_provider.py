@@ -14,6 +14,7 @@ from memory_provider import (
     MemoryRecord,
     ProviderCapabilityError,
     ProviderCapabilities,
+    ProviderRuntimePolicy,
     ProviderValidationError,
     ScopeInventory,
     ScopeInventoryItem,
@@ -71,6 +72,9 @@ class LocalJsonProvider(BaseMemoryProvider):
             "supports_owner_process_mode": False,
             "supports_scope_inventory": True,
         }
+
+    def runtime_policy(self) -> ProviderRuntimePolicy:
+        return {"transport_mode": "direct"}
 
     @property
     def storage_path(self) -> Path:

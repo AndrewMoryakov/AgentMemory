@@ -186,6 +186,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
                 "config_path": "fake-config.json",
                 "api_host": "127.0.0.1",
                 "api_port": 8765,
+                "runtime_policy": {"transport_mode": "owner_process_proxy"},
                 "capabilities": {
                     "supports_semantic_search": True,
                     "supports_text_search": False,
@@ -221,6 +222,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
         self.assertIn("Supports filters: yes", output)
         self.assertIn("Search requires scope: yes", output)
         self.assertIn("Owner-process mode: yes", output)
+        self.assertIn("Transport mode: owner_process_proxy", output)
         self.assertIn("Operational guidance:", output)
         self.assertIn("requires scope", output)
 
@@ -236,6 +238,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
             }, "")
             agentmemory.runtime_info = lambda: {  # type: ignore[assignment]
                 "provider": "mem0",
+                "runtime_policy": {"transport_mode": "owner_process_proxy"},
                 "capabilities": {
                     "supports_semantic_search": True,
                     "supports_text_search": False,
@@ -261,6 +264,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
         payload = json.loads(buffer.getvalue().split('\n', 3)[-1])
         self.assertEqual(rc, 0)
         self.assertEqual(payload["provider"], "mem0")
+        self.assertEqual(payload["runtime_policy"]["transport_mode"], "owner_process_proxy")
         self.assertTrue(payload["provider_guidance"])
         self.assertTrue(payload["client_runtime_guidance"])
 
@@ -275,6 +279,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
             }, "")
             agentmemory.runtime_info = lambda: {  # type: ignore[assignment]
                 "provider": "mem0",
+                "runtime_policy": {"transport_mode": "owner_process_proxy"},
                 "capabilities": {
                     "supports_semantic_search": True,
                     "supports_text_search": False,
@@ -299,6 +304,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
 
         payload = json.loads(buffer.getvalue().split('\n', 3)[-1])
         self.assertEqual(rc, 0)
+        self.assertEqual(payload["runtime_policy"]["transport_mode"], "owner_process_proxy")
         self.assertTrue(payload["client_runtime_guidance"])
 
     def test_connect_clients_prints_client_runtime_guidance(self) -> None:
@@ -312,6 +318,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
             }, "")
             agentmemory.runtime_info = lambda: {  # type: ignore[assignment]
                 "provider": "localjson",
+                "runtime_policy": {"transport_mode": "direct"},
                 "capabilities": {
                     "supports_semantic_search": False,
                     "supports_text_search": True,

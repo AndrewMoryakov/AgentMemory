@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from memory_provider import ProviderCapabilities
+from memory_provider import ProviderCapabilities, ProviderRuntimePolicy
 
 
-def provider_guidance(provider_name: str, capabilities: ProviderCapabilities) -> list[dict[str, str]]:
+def provider_guidance(
+    provider_name: str,
+    capabilities: ProviderCapabilities,
+    runtime_policy: ProviderRuntimePolicy,
+) -> list[dict[str, str]]:
     guidance: list[dict[str, str]] = []
 
     if capabilities.get("requires_scope_for_search") or capabilities.get("requires_scope_for_list"):
@@ -35,12 +39,12 @@ def provider_guidance(provider_name: str, capabilities: ProviderCapabilities) ->
             }
         )
 
-    if capabilities.get("supports_owner_process_mode"):
+    if runtime_policy.get("transport_mode") == "owner_process_proxy":
         guidance.append(
             {
                 "level": "info",
                 "message": (
-                    f"Provider '{provider_name}' supports owner-process mode. "
+                    f"Provider '{provider_name}' uses owner-process proxy transport. "
                     "Prefer the local API/MCP runtime for multi-client shared workflows."
                 ),
             }
@@ -85,13 +89,20 @@ def provider_guidance(provider_name: str, capabilities: ProviderCapabilities) ->
     return guidance
 
 
-def guidance_summary_lines(provider_name: str, capabilities: ProviderCapabilities, *, limit: int = 2) -> tuple[str, ...]:
-    return tuple(item["message"] for item in provider_guidance(provider_name, capabilities)[:limit])
+def guidance_summary_lines(
+    provider_name: str,
+    capabilities: ProviderCapabilities,
+    runtime_policy: ProviderRuntimePolicy,
+    *,
+    limit: int = 2,
+) -> tuple[str, ...]:
+    return tuple(item["message"] for item in provider_guidance(provider_name, capabilities, runtime_policy)[:limit])
 
 
 def client_runtime_guidance(
     provider_name: str,
     capabilities: ProviderCapabilities,
+    runtime_policy: ProviderRuntimePolicy,
     results: list[dict[str, str]],
     *,
     local_server_ok: bool | None = None,
@@ -151,7 +162,7 @@ def client_runtime_guidance(
             }
         )
 
-    if active_targets and capabilities.get("supports_owner_process_mode") and local_server_ok is False:
+    if active_targets and runtime_policy.get("transport_mode") == "owner_process_proxy" and local_server_ok is False:
         guidance.append(
             {
                 "level": "warn",

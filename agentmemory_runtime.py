@@ -13,6 +13,7 @@ from memory_provider import (
     MemoryRecord,
     ProviderCapabilities,
     ProviderConfigurationError,
+    ProviderRuntimePolicy,
 )
 
 
@@ -150,6 +151,10 @@ def active_provider_capabilities() -> ProviderCapabilities:
     return get_provider().capabilities()
 
 
+def active_provider_runtime_policy() -> ProviderRuntimePolicy:
+    return get_provider().runtime_policy()
+
+
 def runtime_info() -> dict[str, Any]:
     config, source, config_path = load_runtime_config_with_source()
     provider = get_provider()
@@ -163,6 +168,7 @@ def runtime_info() -> dict[str, Any]:
         "api_port": current_api_port(),
         "provider": active_provider_name(),
         "capabilities": active_provider_capabilities(),
+        "runtime_policy": active_provider_runtime_policy(),
         "config_source": source,
         **provider.runtime_info(),
     }

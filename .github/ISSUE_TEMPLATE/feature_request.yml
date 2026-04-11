@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a new capability or improvement
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What real user or operator problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the API, workflow, or documentation change you want.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What do users do today without this feature?
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      options:
+        - CLI
+        - HTTP API
+        - MCP
+        - provider layer
+        - docs
+        - examples
+        - other
+    validations:
+      required: true

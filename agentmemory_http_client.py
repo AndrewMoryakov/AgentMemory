@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from agentmemory_platform import launcher_command, launcher_path
-from agentmemory_runtime import BASE_DIR, active_provider_name, current_api_host, current_api_port
+from agentmemory_runtime import BASE_DIR, active_provider_runtime_policy, current_api_host, current_api_port
 from agentmemory_transport import error_class_for_type
 from memory_provider import (
     ProviderError,
@@ -24,7 +24,13 @@ API_START_TIMEOUT_SECONDS = 20.0
 
 
 def should_proxy_to_api() -> bool:
-    return active_provider_name() == "mem0" and os.environ.get(OWNER_ENV) != "1"
+    transport_mode = active_provider_runtime_policy()["transport_mode"]
+    if transport_mode == "remote_only":
+        raise ProviderUnavailableError(
+            "Provider transport mode 'remote_only' requires a supported remote transport implementation; "
+            "local direct execution is not available."
+        )
+    return transport_mode == "owner_process_proxy" and os.environ.get(OWNER_ENV) != "1"
 
 
 def api_base_url() -> str:

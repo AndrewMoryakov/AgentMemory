@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 
 class ProviderError(RuntimeError):
@@ -45,6 +45,10 @@ class ProviderCapabilities(TypedDict):
     requires_scope_for_search: bool
     supports_owner_process_mode: bool
     supports_scope_inventory: bool
+
+
+class ProviderRuntimePolicy(TypedDict):
+    transport_mode: Literal["direct", "owner_process_proxy", "remote_only"]
 
 
 class MemoryRecord(TypedDict, total=False):
@@ -128,6 +132,10 @@ class BaseMemoryProvider(ABC):
 
     @abstractmethod
     def capabilities(self) -> ProviderCapabilities:
+        raise NotImplementedError
+
+    @abstractmethod
+    def runtime_policy(self) -> ProviderRuntimePolicy:
         raise NotImplementedError
 
     @abstractmethod

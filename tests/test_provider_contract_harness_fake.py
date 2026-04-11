@@ -11,6 +11,7 @@ from memory_provider import (
     MemoryRecord,
     ProviderCapabilities,
     ProviderCapabilityError,
+    ProviderRuntimePolicy,
     ScopeInventory,
 )
 from tests.provider_contract_harness import ProviderContractHarness
@@ -51,6 +52,9 @@ class InMemoryContractProvider(BaseMemoryProvider):
             "supports_owner_process_mode": False,
             "supports_scope_inventory": True,
         }
+
+    def runtime_policy(self) -> ProviderRuntimePolicy:
+        return {"transport_mode": "direct"}
 
     def doctor_rows(self) -> list[tuple[str, str]]:
         return [("Records", str(len(self._records)))]

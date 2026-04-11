@@ -25,6 +25,7 @@ from memory_provider import (
     ProviderCapabilityError,
     ProviderCapabilities,
     ProviderConfigurationError,
+    ProviderRuntimePolicy,
     ProviderScopeRequiredError,
     ProviderUnavailableError,
     ProviderValidationError,
@@ -154,6 +155,9 @@ class Mem0Provider(BaseMemoryProvider):
             "supports_owner_process_mode": True,
             "supports_scope_inventory": True,
         }
+
+    def runtime_policy(self) -> ProviderRuntimePolicy:
+        return {"transport_mode": "owner_process_proxy"}
 
     def clear_caches(self) -> None:
         self._get_openrouter_api_key.cache_clear()

@@ -189,16 +189,19 @@ def enrich_client_payload(payload: dict[str, Any], info_payload: dict[str, Any],
     local_server_ok = None
     if include_local_server:
         local_server_ok = bool(payload.get('local_server', {}).get('ok'))
-    guidance = provider_guidance(info_payload['provider'], info_payload.get('capabilities', {}))
+    runtime_policy = info_payload.get('runtime_policy', {'transport_mode': 'direct'})
+    guidance = provider_guidance(info_payload['provider'], info_payload.get('capabilities', {}), runtime_policy)
     client_guidance = client_runtime_guidance(
         info_payload['provider'],
         info_payload.get('capabilities', {}),
+        runtime_policy,
         payload.get('results', []),
         local_server_ok=local_server_ok,
     )
     return {
         **payload,
         'provider': info_payload['provider'],
+        'runtime_policy': runtime_policy,
         'provider_guidance': guidance,
         'client_runtime_guidance': client_guidance,
     }
@@ -652,7 +655,14 @@ def command_doctor(_: argparse.Namespace) -> int:
     print(info(f"Search requires scope: {capabilities['requires_scope_for_search']}"))
     print(info(f"List requires scope: {capabilities['requires_scope_for_list']}"))
     print(info(f"Owner-process mode: {capabilities['supports_owner_process_mode']}"))
-    print_provider_guidance(provider_guidance(info_payload['provider'], info_payload.get('capabilities', {})))
+    print(info(f"Transport mode: {info_payload.get('runtime_policy', {}).get('transport_mode', 'direct')}"))
+    print_provider_guidance(
+        provider_guidance(
+            info_payload['provider'],
+            info_payload.get('capabilities', {}),
+            info_payload.get('runtime_policy', {'transport_mode': 'direct'}),
+        )
+    )
     for prerequisite in provider.prerequisite_checks():
         if prerequisite['ok'] == 'true':
             print(ok(f"{prerequisite['name']}: {prerequisite['details']}"))
@@ -916,7 +926,11 @@ def current_context(*, prompt_menu_enabled: bool = False) -> InteractiveContext:
         api_host=info_payload.get('api_host', '127.0.0.1'),
         api_port=info_payload.get('api_port', 8765),
         provider=info_payload.get('provider', 'mem0'),
-        provider_notes=guidance_summary_lines(info_payload.get('provider', 'mem0'), info_payload.get('capabilities', {})),
+        provider_notes=guidance_summary_lines(
+            info_payload.get('provider', 'mem0'),
+            info_payload.get('capabilities', {}),
+            info_payload.get('runtime_policy', {'transport_mode': 'direct'}),
+        ),
         prompt_menu_enabled=prompt_menu_enabled,
     )
 

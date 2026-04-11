@@ -21,11 +21,12 @@ class AgentMemoryGuidanceTests(unittest.TestCase):
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
             },
+            {"transport_mode": "owner_process_proxy"},
         )
 
         messages = [item["message"] for item in guidance]
         self.assertTrue(any("requires scope" in message for message in messages))
-        self.assertTrue(any("owner-process mode" in message for message in messages))
+        self.assertTrue(any("owner-process proxy transport" in message for message in messages))
 
     def test_guidance_summary_lines_limits_output(self) -> None:
         lines = guidance_summary_lines(
@@ -44,6 +45,7 @@ class AgentMemoryGuidanceTests(unittest.TestCase):
                 "supports_owner_process_mode": False,
                 "supports_scope_inventory": True,
             },
+            {"transport_mode": "direct"},
             limit=1,
         )
 
@@ -66,6 +68,7 @@ class AgentMemoryGuidanceTests(unittest.TestCase):
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
             },
+            {"transport_mode": "owner_process_proxy"},
             [
                 {"target": "cursor", "configured": True, "health": "stale_config", "stale_launcher": True},
             ],
@@ -76,6 +79,29 @@ class AgentMemoryGuidanceTests(unittest.TestCase):
         self.assertTrue(any("Stale client launcher configuration" in message for message in messages))
         self.assertTrue(any("requires scope" in message for message in messages))
         self.assertTrue(any("local server health check is failing" in message for message in messages))
+
+    def test_owner_process_guidance_is_driven_by_runtime_policy_not_capabilities(self) -> None:
+        guidance = provider_guidance(
+            "custom",
+            {
+                "supports_semantic_search": True,
+                "supports_text_search": False,
+                "supports_filters": True,
+                "supports_metadata_filters": True,
+                "supports_rerank": True,
+                "supports_update": True,
+                "supports_delete": True,
+                "supports_scopeless_list": True,
+                "requires_scope_for_list": False,
+                "requires_scope_for_search": False,
+                "supports_owner_process_mode": True,
+                "supports_scope_inventory": True,
+            },
+            {"transport_mode": "direct"},
+        )
+
+        messages = [item["message"] for item in guidance]
+        self.assertFalse(any("owner-process" in message for message in messages))
 
 
 if __name__ == "__main__":
