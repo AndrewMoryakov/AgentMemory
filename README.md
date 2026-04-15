@@ -113,6 +113,19 @@ These files are local-only and should not be committed:
 
 The repository only ships safe templates such as `.env.example`.
 
+### Environment Variables
+
+These optional environment variables override runtime defaults:
+
+| Variable | Default | Description |
+|---|---|---|
+| `AGENTMEMORY_HOME` | auto-detected project root | Override the base directory for config, data, and `.env` |
+| `AGENTMEMORY_API_HOST` | `127.0.0.1` | Bind address for the HTTP API server |
+| `AGENTMEMORY_API_PORT` | `8765` | Port for the HTTP API server |
+| `OPENROUTER_API_KEY` | — | Required for the `mem0` provider (OpenRouter LLM and embeddings) |
+
+Set them in your shell or in the `.env` file at the project root.
+
 ### Main Semantic Backend
 
 Only switch to `mem0` after the `localjson` path above succeeds.
