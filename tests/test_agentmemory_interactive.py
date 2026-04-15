@@ -55,7 +55,7 @@ class AgentMemoryInteractiveTests(unittest.TestCase):
 
     def test_prompt_toolkit_availability_requires_tty(self) -> None:
         with mock.patch('agentmemory.interactive.PromptSession', object()), \
-             mock.patch('agentmemory.interactive.InMemoryHistory', object()), \
+             mock.patch('agentmemory.interactive.FileHistory', object()), \
              mock.patch('agentmemory.interactive.CompleteStyle', object()), \
              mock.patch('agentmemory.interactive.sys.stdin.isatty', return_value=False), \
              mock.patch('agentmemory.interactive.sys.stdout.isatty', return_value=True):

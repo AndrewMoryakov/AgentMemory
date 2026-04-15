@@ -1,9 +1,12 @@
 """Human-readable output formatters for CLI commands."""
 from __future__ import annotations
 
+import re
 import sys
 from datetime import datetime
 from typing import Any
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 
 def _is_tty() -> bool:
@@ -67,18 +70,14 @@ def _columns(rows: list[list[str]], *, padding: int = 2) -> str:
     widths = [0] * col_count
     for row in rows:
         for i, cell in enumerate(row):
-            visible = cell
-            # strip ANSI for width calc
-            import re
-            visible = re.sub(r"\033\[[0-9;]*m", "", visible)
-            widths[i] = max(widths[i], len(visible))
+            visible_len = len(_ANSI_RE.sub("", cell))
+            widths[i] = max(widths[i], visible_len)
 
     lines: list[str] = []
     for row in rows:
         parts = []
         for i, cell in enumerate(row):
-            import re
-            visible_len = len(re.sub(r"\033\[[0-9;]*m", "", cell))
+            visible_len = len(_ANSI_RE.sub("", cell))
             pad = widths[i] - visible_len + padding
             parts.append(cell + " " * pad)
         lines.append("  " + "".join(parts).rstrip())
@@ -100,7 +99,7 @@ def format_memory(record: dict[str, Any]) -> str:
         val = record.get(key)
         if val:
             pairs.append((key.replace("_", " ").title(), val))
-    pairs.append(("Provider", record.get("provider", "")))
+    pairs.append(("Provider", record.get("provider") or "unknown"))
     if record.get("memory_type"):
         pairs.append(("Type", record["memory_type"]))
     pairs.append(("Created", _short_ts(record.get("created_at"))))
@@ -124,7 +123,7 @@ def format_memory_list(records: list[dict[str, Any]], *, show_score: bool = Fals
     header = []
     if show_score:
         header.append(dim("SCORE"))
-    header.extend([dim("ID"), dim("MEMORY"), dim("USER"), dim("UPDATED")])
+    header.extend([dim("ID"), dim("MEMORY"), dim("SCOPE"), dim("UPDATED")])
 
     rows = [header]
     for r in records:
@@ -230,6 +229,11 @@ def format_error(exc: Exception, *, command: str = "") -> str:
         lines.append(dim("  This provider requires --user-id, --agent-id, or --run-id"))
     elif "not available" in str(exc).lower() or "Unavailable" in error_type:
         lines.append(dim("  Try: agentmemory doctor to check runtime status"))
+    elif "capability" in str(exc).lower() or "Capability" in error_type:
+        if "rerank" in str(exc).lower():
+            lines.append(dim("  Try: add --no-rerank to your search command"))
+        else:
+            lines.append(dim("  This operation is not supported by the current provider"))
     elif "configuration" in str(exc).lower() or "Configuration" in error_type:
         lines.append(dim("  Try: agentmemory configure --provider <name>"))
 

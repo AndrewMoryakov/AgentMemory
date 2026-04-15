@@ -9,13 +9,13 @@ from typing import Callable
 try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import Completer, Completion
-    from prompt_toolkit.history import InMemoryHistory
+    from prompt_toolkit.history import FileHistory
     from prompt_toolkit.shortcuts import CompleteStyle
 except Exception:  # pragma: no cover
     PromptSession = None
     Completion = None
     Completer = object  # type: ignore[assignment]
-    InMemoryHistory = None
+    FileHistory = None
     CompleteStyle = None
 
 
@@ -66,11 +66,15 @@ class SlashCommandCompleter(Completer):  # type: ignore[misc]
 def prompt_toolkit_available() -> bool:
     return (
         PromptSession is not None
-        and InMemoryHistory is not None
+        and FileHistory is not None
         and CompleteStyle is not None
         and sys.stdin.isatty()
         and sys.stdout.isatty()
     )
+
+
+def _history_path() -> Path:
+    return Path.home() / ".agentmemory_history"
 
 
 def build_prompt_session():
@@ -81,7 +85,7 @@ def build_prompt_session():
         complete_while_typing=True,
         complete_style=CompleteStyle.MULTI_COLUMN,
         reserve_space_for_menu=8,
-        history=InMemoryHistory(),
+        history=FileHistory(str(_history_path())),
     )
 
 
@@ -145,7 +149,7 @@ def render_home_screen(context: InteractiveContext) -> str:
     notes_block = ''
     if context.provider_notes:
         note_lines = '\n'.join(f'  {yellow("›")} {note}' for note in context.provider_notes)
-        notes_block = f'\n{notes_block}\n{note_lines}\n'
+        notes_block = f'\n{note_lines}\n'
 
     api_url = f'http://{context.api_host}:{context.api_port}'
     menu_label = green('● enabled') if context.prompt_menu_enabled else dim('○ basic mode')
