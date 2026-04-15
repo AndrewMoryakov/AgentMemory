@@ -35,7 +35,7 @@ class AgentMemoryTransportTests(unittest.TestCase):
                 "limit": 10,
                 "filters": None,
                 "threshold": None,
-                "rerank": True,
+                "rerank": None,
             },
         )
 

@@ -501,14 +501,15 @@ class Mem0Provider(BaseMemoryProvider):
             return exc
         if isinstance(exc, Mem0MemoryNotFoundError):
             return MemoryNotFoundError(str(exc))
-        if isinstance(exc, Mem0ConfigurationError):
-            return ProviderConfigurationError(str(exc))
 
         message = str(exc)
         if self._message_indicates_scope_required(message):
             return ProviderScopeRequiredError(message)
         if self._message_indicates_qdrant_lock(message):
             return ProviderUnavailableError(message)
+
+        if isinstance(exc, Mem0ConfigurationError):
+            return ProviderConfigurationError(str(exc))
         if isinstance(exc, ProviderValidationError):
             return exc
         return ProviderUnavailableError(message)
