@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +26,8 @@ from agentmemory.providers.base import (
     ProviderError,
     ProviderValidationError,
 )
+
+logger = logging.getLogger(__name__)
 
 WEB_DIR = BASE_DIR / "web"
 
@@ -278,7 +281,8 @@ def main():
     api_host = current_api_host()
     api_port = current_api_port()
     server = ThreadingHTTPServer((api_host, api_port), Handler)
-    print(f"AgentMemory API listening on http://{api_host}:{api_port}")
+    logging.basicConfig(format="%(asctime)s [%(name)s] %(message)s", level=logging.INFO)
+    logger.info("AgentMemory API listening on http://%s:%s", api_host, api_port)
     server.serve_forever()
 
 

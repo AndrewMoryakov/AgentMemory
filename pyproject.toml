@@ -40,5 +40,17 @@ agentmemory-mcp = "agentmemory.mcp:main"
 provider-certify = "agentmemory.certification.certify:main"
 provider-certify-ci = "agentmemory.certification.ci:main"
 
+[project.optional-dependencies]
+dev = ["mypy>=1.0"]
+
 [tool.setuptools.packages.find]
 include = ["agentmemory*"]
+
+[tool.setuptools.package-data]
+agentmemory = ["py.typed"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

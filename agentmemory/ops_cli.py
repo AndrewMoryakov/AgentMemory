@@ -1,10 +1,13 @@
 import argparse
 import json
+import logging
 import sys
 
 from agentmemory.runtime.operation_adapters import cli_operation_source
 from agentmemory.runtime.operations import OPERATIONS
 from agentmemory.providers.base import ProviderError, ProviderValidationError
+
+logger = logging.getLogger(__name__)
 
 
 def print_json(data):
@@ -100,7 +103,7 @@ def main() -> int:
             print_json(OPERATIONS["delete"].execute(cli_operation_source("delete", args, parse_json_arg=parse_metadata)))
             return 0
     except ProviderError as exc:
-        print(str(exc), file=sys.stderr)
+        logger.error("%s", exc)
         return 2
 
     return 1

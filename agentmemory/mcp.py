@@ -1,12 +1,14 @@
 import json
+import logging
 import sys
-import traceback
 from typing import Any
 
 from agentmemory.runtime.operation_adapters import mcp_operation_source
 from agentmemory.runtime.operations import OPERATIONS_BY_MCP_NAME, mcp_tools
 from agentmemory.runtime.transport import mcp_result, provider_error_payload
 from agentmemory.providers.base import ProviderError
+
+logger = logging.getLogger(__name__)
 
 SERVER_INFO = {
     "name": "agentmemory",
@@ -80,7 +82,7 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
         except KeyError:
             return error(request_id, -32601, f"Unknown tool: {name}")
         except Exception as exc:
-            traceback.print_exc(file=sys.stderr)
+            logger.exception("Unexpected error in tools/call %s", name)
             return success(request_id, mcp_result({"error_type": "InternalError", "message": str(exc)}, is_error=True))
     if method == "resources/list":
         return success(request_id, {"resources": []})
@@ -119,7 +121,7 @@ def main() -> int:
     except KeyboardInterrupt:
         return 0
     except Exception:
-        traceback.print_exc(file=sys.stderr)
+        logger.exception("MCP server fatal error")
         return 1
 
 

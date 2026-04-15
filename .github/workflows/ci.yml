@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.13"]
+        python-version: ["3.11", "3.13"]
 
     steps:
       - name: Check out repository
@@ -29,9 +29,27 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .
 
+      - name: Compile key modules
+        run: python -m compileall agentmemory tests scripts/mcp-smoke-test.py
+
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
-      - name: Compile key modules
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install package and dev dependencies
         run: |
-          python -m compileall agentmemory tests scripts/mcp-smoke-test.py
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run mypy
+        run: python -m mypy agentmemory --ignore-missing-imports

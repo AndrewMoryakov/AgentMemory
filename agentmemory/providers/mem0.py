@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import logging
 import os
-import sys
 from functools import lru_cache
 import importlib.metadata
 import pickle
@@ -35,6 +35,8 @@ from agentmemory.providers.base import (
     ScopeInventoryItem,
 )
 
+
+logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 PLACEHOLDER_KEYS = {"paste-your-openrouter-key-here", "YOUR_OPENROUTER_API_KEY"}
@@ -367,7 +369,7 @@ class Mem0Provider(BaseMemoryProvider):
                                     hydrated["raw"] = merged_raw
                                 return hydrated
                             except Exception as exc:
-                                print(f"[agentmemory] hydration failed for {record['id']}: {exc}", file=sys.stderr)
+                                logger.warning("Hydration failed for %s: %s", record["id"], exc)
                                 return record
                         return record
             return self._fallback_added_record(
@@ -387,7 +389,7 @@ class Mem0Provider(BaseMemoryProvider):
                     hydrated["raw"] = merged_raw
                 return hydrated
             except Exception as exc:
-                print(f"[agentmemory] hydration failed for {record['id']}: {exc}", file=sys.stderr)
+                logger.warning("Hydration failed for %s: %s", record["id"], exc)
                 return record
         return record
 
