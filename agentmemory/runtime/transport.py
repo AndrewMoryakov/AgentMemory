@@ -67,25 +67,34 @@ def validate_list_request(
 
 
 def build_search_kwargs(source: dict[str, Any], *, default_limit: int = 10) -> dict[str, Any]:
+    query = source.get("query")
+    if not query or not isinstance(query, str) or not query.strip():
+        raise ProviderValidationError("Search query must be a non-empty string.")
+    filters = source.get("filters")
+    if filters is not None and not isinstance(filters, dict):
+        raise ProviderValidationError("Filters must be a JSON object (dict).")
     return {
-        "query": source["query"],
+        "query": query,
         "user_id": source.get("user_id"),
         "agent_id": source.get("agent_id"),
         "run_id": source.get("run_id"),
         "limit": source.get("limit", default_limit),
-        "filters": source.get("filters"),
+        "filters": filters,
         "threshold": source.get("threshold"),
-        "rerank": source.get("rerank", True),
+        "rerank": source.get("rerank"),
     }
 
 
 def build_list_kwargs(source: dict[str, Any], *, default_limit: int = 100) -> dict[str, Any]:
+    filters = source.get("filters")
+    if filters is not None and not isinstance(filters, dict):
+        raise ProviderValidationError("Filters must be a JSON object (dict).")
     return {
         "user_id": source.get("user_id"),
         "agent_id": source.get("agent_id"),
         "run_id": source.get("run_id"),
         "limit": source.get("limit", default_limit),
-        "filters": source.get("filters"),
+        "filters": filters,
     }
 
 
@@ -97,6 +106,8 @@ def validate_and_build_search_kwargs(
     default_limit: int = 10,
 ) -> dict[str, Any]:
     kwargs = build_search_kwargs(source, default_limit=default_limit)
+    if kwargs["rerank"] is None:
+        kwargs["rerank"] = capabilities["supports_rerank"]
     validate_search_request(
         provider_name=provider_name,
         capabilities=capabilities,

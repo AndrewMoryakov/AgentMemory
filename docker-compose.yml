@@ -6,7 +6,14 @@ services:
     environment:
       AGENTMEMORY_API_HOST: "0.0.0.0"
       AGENTMEMORY_API_PORT: "8765"
+      AGENTMEMORY_HOME: "/app/data"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
     volumes:
       - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped

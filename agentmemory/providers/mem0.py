@@ -536,6 +536,8 @@ class Mem0Provider(BaseMemoryProvider):
         ]
 
     def add_memory(self, *, messages, user_id=None, agent_id=None, run_id=None, metadata=None, infer=True, memory_type=None) -> MemoryRecord:
+        if not messages:
+            raise ProviderValidationError("Messages must be a non-empty list.")
         with self._memory_lock:
             try:
                 memory = self._load_memory()

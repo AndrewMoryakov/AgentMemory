@@ -153,7 +153,7 @@ OPERATIONS: dict[str, OperationSpec] = {
         input_schema={
             "type": "object",
             "properties": {
-                "text": {"type": "string", "description": "Memory text to store."},
+                "text": {"type": "string", "description": "Memory text to store. Converted to messages format internally."},
                 "user_id": {"type": "string"},
                 "agent_id": {"type": "string"},
                 "run_id": {"type": "string"},
@@ -197,7 +197,7 @@ OPERATIONS: dict[str, OperationSpec] = {
                 "limit": {"type": "integer", "default": 10, "minimum": 1},
                 "threshold": {"type": "number"},
                 "filters": {"type": "object"},
-                "rerank": {"type": "boolean", "default": True},
+                "rerank": {"type": "boolean", "description": "Defaults to provider capability if omitted."},
             },
             "required": ["query"],
             "additionalProperties": False,

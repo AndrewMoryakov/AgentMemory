@@ -68,7 +68,11 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
         return success(request_id, {"tools": TOOLS})
     if method == "tools/call":
         name = params.get("name")
+        if not isinstance(name, str) or not name:
+            return error(request_id, -32602, "Tool name must be a non-empty string.")
         arguments = params.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            return error(request_id, -32602, "Tool arguments must be a JSON object.")
         try:
             return success(request_id, handle_call(name, arguments))
         except ProviderError as exc:

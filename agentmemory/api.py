@@ -29,6 +29,13 @@ from agentmemory.providers.base import (
 WEB_DIR = BASE_DIR / "web"
 
 
+def _extract_memory_id(path: str) -> str:
+    memory_id = path.rsplit("/", 1)[-1]
+    if not memory_id or memory_id in {"memories", "admin"}:
+        raise ProviderValidationError("Missing or empty memory_id in URL path.")
+    return memory_id
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "AgentMemory/1.0"
 
@@ -130,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"items": result, "count": len(result)})
                 return
             if parsed.path.startswith("/admin/memories/"):
-                memory_id = parsed.path.rsplit("/", 1)[-1]
+                memory_id = _extract_memory_id(parsed.path)
                 self._send(200, get_admin_memory(memory_id))
                 return
             if parsed.path == "/memories":
@@ -138,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, result)
                 return
             if parsed.path.startswith("/memories/"):
-                memory_id = parsed.path.rsplit("/", 1)[-1]
+                memory_id = _extract_memory_id(parsed.path)
                 self._send(200, OPERATIONS["get"].execute(http_operation_source("get", path_params={"memory_id": memory_id})))
                 return
             self._send(404, {"error": "Not found"})
@@ -182,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_PATCH(self):
         try:
             if self.path.startswith("/admin/memories/"):
-                memory_id = self.path.rsplit("/", 1)[-1]
+                memory_id = _extract_memory_id(self.path)
                 payload = self._read_json()
                 result = update_admin_memory(
                     memory_id,
@@ -204,11 +211,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         try:
             if self.path.startswith("/admin/memories/"):
-                memory_id = self.path.rsplit("/", 1)[-1]
+                memory_id = _extract_memory_id(self.path)
                 self._send(200, delete_admin_memory(memory_id))
                 return
             if self.path.startswith("/memories/"):
-                memory_id = self.path.rsplit("/", 1)[-1]
+                memory_id = _extract_memory_id(self.path)
                 self._send(200, OPERATIONS["delete"].execute(http_operation_source("delete", path_params={"memory_id": memory_id})))
                 return
             self._send(404, {"error": "Not found"})

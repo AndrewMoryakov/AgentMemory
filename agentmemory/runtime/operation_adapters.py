@@ -92,11 +92,14 @@ def http_operation_source(
     if operation_name == "add":
         return dict(payload)
     if operation_name == "list_scopes":
-        return {
-            "limit": int((query_params.get("limit") or ["200"])[0]),
+        source: dict[str, Any] = {
             "kind": (query_params.get("kind") or [None])[0],
             "query": (query_params.get("query") or [None])[0],
         }
+        limit_raw = (query_params.get("limit") or [None])[0]
+        if limit_raw is not None:
+            source["limit"] = int(limit_raw)
+        return source
     if operation_name == "search":
         return dict(payload)
     if operation_name == "update":
@@ -109,13 +112,16 @@ def http_operation_source(
                 filters = json.loads(filters_param)
             except json.JSONDecodeError as exc:
                 raise ProviderValidationError(f"Invalid JSON: {exc.msg}") from exc
-        return {
+        source = {
             "user_id": (query_params.get("user_id") or [None])[0],
             "agent_id": (query_params.get("agent_id") or [None])[0],
             "run_id": (query_params.get("run_id") or [None])[0],
-            "limit": int((query_params.get("limit") or ["100"])[0]),
             "filters": filters,
         }
+        limit_raw = (query_params.get("limit") or [None])[0]
+        if limit_raw is not None:
+            source["limit"] = int(limit_raw)
+        return source
     if operation_name in {"get", "delete"}:
         return {"memory_id": path_params["memory_id"]}
     raise ProviderValidationError(f"Unsupported HTTP operation: {operation_name}")
