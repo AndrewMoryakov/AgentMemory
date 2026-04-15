@@ -28,6 +28,17 @@ from agentmemory.providers.base import (
 
 WEB_DIR = BASE_DIR / "web"
 
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Accept",
+    "Access-Control-Max-Age": "86400",
+}
+
+MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+
+LOCALHOST_ADDRS = {"127.0.0.1", "::1"}
+
 
 def _extract_memory_id(path: str) -> str:
     memory_id = path.rsplit("/", 1)[-1]
@@ -49,6 +60,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            for key, value in CORS_HEADERS.items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
         except Exception as exc:
@@ -60,6 +73,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            for key, value in CORS_HEADERS.items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
         except Exception as exc:
@@ -68,6 +83,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", "0"))
+        if length > MAX_REQUEST_BODY_BYTES:
+            raise ProviderValidationError(
+                f"Request body too large ({length} bytes, max {MAX_REQUEST_BODY_BYTES})."
+            )
         raw = self.rfile.read(length) if length else b"{}"
         return json.loads(raw.decode("utf-8")) if raw else {}
 
@@ -90,8 +109,29 @@ class Handler(BaseHTTPRequestHandler):
         self._send_bytes(200, path.read_bytes(), content_type)
         return True
 
+    def _is_localhost(self) -> bool:
+        return self.client_address[0] in LOCALHOST_ADDRS
+
+    def _reject_non_localhost(self) -> bool:
+        """Return True if the request was rejected (not from localhost)."""
+        if not self._is_localhost():
+            self._send(403, {"error": "Admin endpoints are only accessible from localhost."})
+            return True
+        return False
+
     def log_message(self, format, *args):
         return
+
+    def do_OPTIONS(self):
+        try:
+            self.send_response(204)
+            for key, value in CORS_HEADERS.items():
+                self.send_header(key, value)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        except Exception as exc:
+            if not self._client_disconnected(exc):
+                raise
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -108,6 +148,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/health":
                 self._send(200, OPERATIONS["health"].execute(http_operation_source("health")))
+                return
+            if parsed.path.startswith("/admin") and self._reject_non_localhost():
                 return
             if parsed.path == "/admin/stats":
                 self._send(200, admin_stats(limit=int(params.get("limit", [500])[0])))
@@ -158,6 +200,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if self.path.startswith("/admin") and self._reject_non_localhost():
+                return
             if self.path.startswith("/admin/memories/") and self.path.endswith("/pin"):
                 memory_id = self.path.removeprefix("/admin/memories/").removesuffix("/pin").rstrip("/")
                 payload = self._read_json()
@@ -188,6 +232,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         try:
+            if self.path.startswith("/admin") and self._reject_non_localhost():
+                return
             if self.path.startswith("/admin/memories/"):
                 memory_id = _extract_memory_id(self.path)
                 payload = self._read_json()
@@ -210,6 +256,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         try:
+            if self.path.startswith("/admin") and self._reject_non_localhost():
+                return
             if self.path.startswith("/admin/memories/"):
                 memory_id = _extract_memory_id(self.path)
                 self._send(200, delete_admin_memory(memory_id))
