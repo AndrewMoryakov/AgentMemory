@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from functools import lru_cache
 import importlib.metadata
 import pickle
@@ -365,7 +366,8 @@ class Mem0Provider(BaseMemoryProvider):
                                     merged_raw.update(record["raw"])
                                     hydrated["raw"] = merged_raw
                                 return hydrated
-                            except Exception:
+                            except Exception as exc:
+                                print(f"[agentmemory] hydration failed for {record['id']}: {exc}", file=sys.stderr)
                                 return record
                         return record
             return self._fallback_added_record(
@@ -384,7 +386,8 @@ class Mem0Provider(BaseMemoryProvider):
                     merged_raw.update(record["raw"])
                     hydrated["raw"] = merged_raw
                 return hydrated
-            except Exception:
+            except Exception as exc:
+                print(f"[agentmemory] hydration failed for {record['id']}: {exc}", file=sys.stderr)
                 return record
         return record
 
@@ -476,6 +479,21 @@ class Mem0Provider(BaseMemoryProvider):
         }
         return {"provider": self.provider_name, "items": items[:limit], "totals": totals}
 
+    @staticmethod
+    def _message_indicates_scope_required(message: str) -> bool:
+        lower = message.lower()
+        scope_keywords = ("user_id", "agent_id", "run_id")
+        return any(kw in lower for kw in scope_keywords) and (
+            "must be provided" in lower or "required" in lower
+        )
+
+    @staticmethod
+    def _message_indicates_qdrant_lock(message: str) -> bool:
+        lower = message.lower()
+        return "qdrant" in lower and (
+            "already accessed" in lower or "another instance" in lower or "locked" in lower
+        )
+
     def _map_exception(self, exc: Exception) -> Exception:
         if isinstance(exc, ProviderConfigurationError):
             return exc
@@ -487,9 +505,9 @@ class Mem0Provider(BaseMemoryProvider):
             return ProviderConfigurationError(str(exc))
 
         message = str(exc)
-        if "At least one of 'user_id', 'agent_id', or 'run_id' must be provided." in message:
+        if self._message_indicates_scope_required(message):
             return ProviderScopeRequiredError(message)
-        if "already accessed by another instance of Qdrant client" in message:
+        if self._message_indicates_qdrant_lock(message):
             return ProviderUnavailableError(message)
         if isinstance(exc, ProviderValidationError):
             return exc

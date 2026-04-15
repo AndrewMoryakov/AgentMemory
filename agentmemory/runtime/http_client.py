@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import time
 from typing import Any
@@ -21,6 +22,7 @@ from agentmemory.providers.base import (
 OWNER_ENV = "AGENTMEMORY_OWNER_PROCESS"
 START_API = launcher_path(BASE_DIR, "start-agentmemory-api")
 API_START_TIMEOUT_SECONDS = 20.0
+PROXY_REQUEST_TIMEOUT_SECONDS = 30
 
 
 def should_proxy_to_api() -> bool:
@@ -46,7 +48,7 @@ def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> A
 
     request = Request(api_base_url() + path, data=data, method=method, headers=headers)
     try:
-        with urlopen(request, timeout=30) as response:
+        with urlopen(request, timeout=PROXY_REQUEST_TIMEOUT_SECONDS) as response:
             body = response.read()
     except HTTPError as exc:
         body = exc.read()
@@ -54,11 +56,15 @@ def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> A
             response_payload = json.loads(body.decode("utf-8"))
             message = response_payload.get("error", str(exc))
             error_type = response_payload.get("error_type", "")
-        except Exception:
+        except (ValueError, UnicodeDecodeError):
             message = str(exc)
             error_type = ""
         error_type_cls = error_class_for_type(error_type, status_code=exc.code)
         raise error_type_cls(message) from exc
+    except socket.timeout as exc:
+        raise ProviderUnavailableError(
+            f"AgentMemory API request to {path} timed out after {PROXY_REQUEST_TIMEOUT_SECONDS}s."
+        ) from exc
     except URLError as exc:
         raise ProviderUnavailableError(f"AgentMemory API is not reachable at {api_base_url()}. Start it with `agentmemory start-api`.") from exc
 

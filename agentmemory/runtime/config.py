@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import subprocess
+import urllib.error
 import urllib.request
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -350,7 +351,7 @@ def read_api_pid() -> int | None:
         return None
     try:
         return int(API_PID_FILE.read_text(encoding="ascii").strip())
-    except Exception:
+    except (OSError, ValueError):
         return None
 
 
@@ -373,7 +374,7 @@ def process_exists(pid: int | None) -> bool:
             errors="replace",
         )
         return str(pid) in proc.stdout
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
@@ -403,7 +404,7 @@ def listening_pid_for_api_port(host: str, port: int) -> int | None:
             )
             value = result.stdout.strip()
             return int(value) if value else None
-        except Exception:
+        except (OSError, subprocess.SubprocessError, ValueError):
             return None
 
     try:
@@ -417,7 +418,7 @@ def listening_pid_for_api_port(host: str, port: int) -> int | None:
         )
         value = result.stdout.strip()
         return int(value) if value else None
-    except Exception:
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
 
 
@@ -426,7 +427,7 @@ def api_health_payload(host: str, port: int, *, timeout_seconds: float = 2.0) ->
         with urllib.request.urlopen(f"http://{host}:{port}/health", timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
             return payload if isinstance(payload, dict) else None
-    except Exception:
+    except (OSError, ValueError, urllib.error.URLError):
         return None
 
 
@@ -437,7 +438,7 @@ def read_api_state() -> dict[str, Any] | None:
         payload = json.loads(API_STATE_FILE.read_text(encoding="utf-8"))
         if isinstance(payload, dict):
             return payload
-    except Exception:
+    except (OSError, ValueError):
         return None
     return None
 
