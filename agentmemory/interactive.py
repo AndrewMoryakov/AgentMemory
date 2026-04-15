@@ -33,17 +33,23 @@ class InteractiveContext:
 
 SLASH_COMMANDS: dict[str, str] = {
     '/help': 'Show shell help',
-    '/install': 'Run the installer workflow',
-    '/configure': 'Configure provider or runtime settings',
-    '/provider': 'Quick provider switch',
-    '/doctor': 'Run diagnostics',
+    '/list': 'List memories for a scope',
+    '/search': 'Search memories',
+    '/add': 'Store a new memory',
+    '/get': 'Get a memory by ID',
+    '/scopes': 'List known scopes',
+    '/health': 'Show runtime health',
+    '/doctor': 'Run full diagnostics',
     '/start': 'Start the local API',
     '/stop': 'Stop the local API',
+    '/configure': 'Configure provider or runtime',
+    '/provider': 'Quick provider switch',
     '/ui': 'Start API and print console URL',
-    '/mcp': 'Run MCP smoke test',
     '/status': 'Show client connection status',
-    '/clients': 'Run client diagnostics',
     '/snippets': 'Print MCP snippets',
+    '/install': 'Run the installer workflow',
+    '/mcp': 'Run MCP smoke test',
+    '/clients': 'Run client diagnostics',
     '/exit': 'Exit the shell',
 }
 
@@ -110,6 +116,7 @@ def normalize_command_line(raw: str) -> list[str]:
         'help': ['help'],
         '?': ['help'],
         'doctor': ['doctor'],
+        'health': ['health'],
         'install': ['install'],
         'configure': ['configure'],
         'snippets': ['snippets'],
@@ -118,6 +125,13 @@ def normalize_command_line(raw: str) -> list[str]:
         'mcp': ['mcp-smoke'],
         'start': ['start-api'],
         'stop': ['stop-api'],
+        'list': ['list'],
+        'search': ['search'],
+        'add': ['add'],
+        'get': ['get'],
+        'update': ['update'],
+        'delete': ['delete'],
+        'scopes': ['list-scopes'],
     }
 
     if head == 'provider' and tail:
@@ -162,13 +176,14 @@ def render_home_screen(context: InteractiveContext) -> str:
 {"│" if is_tty else ""}  Config      {context.config_path.name}
 {"│" if is_tty else ""}  Completions {menu_label}
 {"╰──────────────────────────────────────────────────╯" if is_tty else ""}{notes_block}
-{bold("Quick actions")}
-  {cyan("/doctor")}     Run diagnostics
-  {cyan("/start")}      Start the local API
-  {cyan("/ui")}         Start API and open console URL
-  {cyan("/status")}     Check connected clients
-  {cyan("/snippets")}   Print MCP setup snippets
-  {cyan("/help")}       Full command reference
+{bold("Memory")}
+  {cyan("/list")}       List memories          {cyan("/search")} {dim("<query>")}  Search
+  {cyan("/add")}        Store a new memory     {cyan("/get")} {dim("<id>")}      Get by ID
+  {cyan("/scopes")}     List known scopes      {cyan("/health")}          Runtime status
+
+{bold("Admin")}
+  {cyan("/doctor")}     Run diagnostics        {cyan("/start")}           Start API
+  {cyan("/configure")}  Configure provider     {cyan("/snippets")}        MCP snippets
 
 {dim("Type / to open the command menu · /exit to leave")}'''.strip()
 
@@ -179,26 +194,33 @@ def shell_intro(context: InteractiveContext) -> str:
 def interactive_help(context: InteractiveContext) -> str:
     return f'''AgentMemory interactive shell
 
-Slash commands
-  /help                      Show this help
-  /install                   Run the installer workflow
-  /configure                 Configure provider or runtime settings
-  /provider <name>           Quick provider switch
-  /doctor                    Run diagnostics
-  /start                     Start the local API
-  /stop                      Stop the local API
-  /ui                        Start API and print console URL
-  /mcp                       Run MCP smoke test
-  /status                    Show client connection status
-  /clients                   Run client diagnostics
-  /snippets                  Print MCP snippets
-  /exit                      Exit the shell
+Memory commands
+  /list                                List memories (add --user-id to filter)
+  /search <query>                      Search memories
+  /add --message "<text>" --user-id u  Store a new memory
+  /get <memory-id>                     Get one memory by ID
+  /scopes                              List known user/agent/run scopes
+  /health                              Show runtime health status
+
+Admin commands
+  /doctor                              Run full diagnostics
+  /configure                           Configure provider or runtime settings
+  /provider <name>                     Quick provider switch
+  /start                               Start the local API
+  /stop                                Stop the local API
+  /ui                                  Start API and print console URL
+  /status                              Show client connection status
+  /snippets                            Print MCP setup snippets
+  /mcp                                 Run MCP smoke test
+  /install                             Run the installer workflow
+  /exit                                Exit the shell
 
 Examples
+  /list --user-id alice
+  /search "dark mode" --user-id alice
+  /add --message "prefers dark mode" --user-id alice
   /provider localjson
-  /configure --provider mem0 --openrouter-api-key sk-or-v1-...
   /start --host {context.api_host} --port {context.api_port}
-  /ui
 '''.strip()
 
 

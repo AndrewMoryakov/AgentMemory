@@ -46,6 +46,16 @@ from agentmemory.runtime.config import (
     write_runtime_config,
 )
 from agentmemory.runtime.transport import capability_summary
+from agentmemory.runtime.operation_adapters import cli_operation_source
+from agentmemory.runtime.operations import OPERATIONS
+from agentmemory.formatting import (
+    format_delete,
+    format_error,
+    format_health,
+    format_memory,
+    format_memory_list,
+    format_scopes,
+)
 from agentmemory.certification.certify import certification_report, certification_report_json, list_targets, list_targets_json
 
 
@@ -949,6 +959,104 @@ def command_provider_certify(args: argparse.Namespace) -> int:
     )
 
 
+# ---------------------------------------------------------------------------
+# Data commands (memory operations via unified CLI)
+# ---------------------------------------------------------------------------
+
+def _parse_json_arg(raw):
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        from agentmemory.providers.base import ProviderValidationError
+        raise ProviderValidationError(f"Invalid JSON: {exc.msg}") from exc
+
+
+def _data_use_json(args: argparse.Namespace) -> bool:
+    if getattr(args, "json", False):
+        return True
+    return not sys.stdout.isatty()
+
+
+def _data_output(result, *, formatter, args: argparse.Namespace) -> int:
+    if _data_use_json(args):
+        print(json.dumps(result, ensure_ascii=True, indent=2, default=str))
+    else:
+        print(formatter(result))
+    return 0
+
+
+def _data_error(exc: Exception, args: argparse.Namespace) -> int:
+    if _data_use_json(args):
+        print(json.dumps({"error": str(exc), "error_type": type(exc).__name__}, ensure_ascii=True, indent=2), file=sys.stderr)
+    else:
+        print(format_error(exc), file=sys.stderr)
+    return 2
+
+
+def command_memory_add(args: argparse.Namespace) -> int:
+    try:
+        result = OPERATIONS["add"].execute(cli_operation_source("add", args, parse_json_arg=_parse_json_arg))
+        rc = _data_output(result, formatter=format_memory, args=args)
+        if not _data_use_json(args):
+            print(info("Next: agentmemory search \"<query>\" or agentmemory list"))
+        return rc
+    except Exception as exc:
+        return _data_error(exc, args)
+
+
+def command_memory_search(args: argparse.Namespace) -> int:
+    try:
+        result = OPERATIONS["search"].execute(cli_operation_source("search", args, parse_json_arg=_parse_json_arg))
+        return _data_output(result, formatter=lambda r: format_memory_list(r, show_score=True), args=args)
+    except Exception as exc:
+        return _data_error(exc, args)
+
+
+def command_memory_list(args: argparse.Namespace) -> int:
+    try:
+        result = OPERATIONS["list"].execute(cli_operation_source("list", args, parse_json_arg=_parse_json_arg))
+        rc = _data_output(result, formatter=format_memory_list, args=args)
+        if not _data_use_json(args) and not result:
+            print(info("Try: agentmemory add --message \"<text>\" --user-id <user>"))
+        return rc
+    except Exception as exc:
+        return _data_error(exc, args)
+
+
+def command_memory_get(args: argparse.Namespace) -> int:
+    try:
+        result = OPERATIONS["get"].execute(cli_operation_source("get", args, parse_json_arg=_parse_json_arg))
+        return _data_output(result, formatter=format_memory, args=args)
+    except Exception as exc:
+        return _data_error(exc, args)
+
+
+def command_memory_update(args: argparse.Namespace) -> int:
+    try:
+        result = OPERATIONS["update"].execute(cli_operation_source("update", args, parse_json_arg=_parse_json_arg))
+        return _data_output(result, formatter=format_memory, args=args)
+    except Exception as exc:
+        return _data_error(exc, args)
+
+
+def command_memory_delete(args: argparse.Namespace) -> int:
+    try:
+        result = OPERATIONS["delete"].execute(cli_operation_source("delete", args, parse_json_arg=_parse_json_arg))
+        return _data_output(result, formatter=format_delete, args=args)
+    except Exception as exc:
+        return _data_error(exc, args)
+
+
+def command_memory_health(args: argparse.Namespace) -> int:
+    try:
+        result = OPERATIONS["health"].execute(cli_operation_source("health", args, parse_json_arg=_parse_json_arg))
+        return _data_output(result, formatter=format_health, args=args)
+    except Exception as exc:
+        return _data_error(exc, args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     runtime_defaults = runtime_info()
     default_host = runtime_defaults.get('api_host', '127.0.0.1')
@@ -1038,6 +1146,61 @@ def build_parser() -> argparse.ArgumentParser:
     provider_certify_parser.add_argument('--run-tests', action='store_true', help='Also run the registered certification-related test modules for the provider.')
     provider_certify_parser.add_argument('--summary-only', action='store_true', help='Show only the certification verdict and test summary without the detailed test log.')
     provider_certify_parser.set_defaults(func=command_provider_certify)
+
+    # --- Data commands (memory operations) ---
+
+    add_parser = subparsers.add_parser('add', help='Store a new memory.')
+    add_parser.add_argument('--user-id', help='User scope.')
+    add_parser.add_argument('--agent-id', help='Agent scope.')
+    add_parser.add_argument('--run-id', help='Run scope.')
+    add_parser.add_argument('--message', action='append', required=True, help='Memory text (repeat for multiple).')
+    add_parser.add_argument('--metadata', help='JSON metadata object.')
+    add_parser.add_argument('--no-infer', action='store_true', help='Disable inference.')
+    add_parser.add_argument('--memory-type', help='Memory type tag.')
+    add_parser.add_argument('--json', action='store_true', help='Output raw JSON.')
+    add_parser.set_defaults(func=command_memory_add)
+
+    search_parser = subparsers.add_parser('search', help='Search memories.')
+    search_parser.add_argument('query', help='Search query text.')
+    search_parser.add_argument('--user-id', help='User scope.')
+    search_parser.add_argument('--agent-id', help='Agent scope.')
+    search_parser.add_argument('--run-id', help='Run scope.')
+    search_parser.add_argument('--limit', type=int, default=10)
+    search_parser.add_argument('--threshold', type=float, help='Minimum score threshold.')
+    search_parser.add_argument('--filters', help='JSON filters object.')
+    search_parser.add_argument('--no-rerank', action='store_true', help='Disable reranking.')
+    search_parser.add_argument('--json', action='store_true', help='Output raw JSON.')
+    search_parser.set_defaults(func=command_memory_search)
+
+    list_mem_parser = subparsers.add_parser('list', help='List memories for a scope.')
+    list_mem_parser.add_argument('--user-id', help='User scope.')
+    list_mem_parser.add_argument('--agent-id', help='Agent scope.')
+    list_mem_parser.add_argument('--run-id', help='Run scope.')
+    list_mem_parser.add_argument('--limit', type=int, default=100)
+    list_mem_parser.add_argument('--filters', help='JSON filters object.')
+    list_mem_parser.add_argument('--json', action='store_true', help='Output raw JSON.')
+    list_mem_parser.set_defaults(func=command_memory_list)
+
+    get_parser = subparsers.add_parser('get', help='Get a memory by ID.')
+    get_parser.add_argument('memory_id', help='Memory ID.')
+    get_parser.add_argument('--json', action='store_true', help='Output raw JSON.')
+    get_parser.set_defaults(func=command_memory_get)
+
+    update_parser = subparsers.add_parser('update', help='Update a memory by ID.')
+    update_parser.add_argument('memory_id', help='Memory ID.')
+    update_parser.add_argument('data', help='New memory text.')
+    update_parser.add_argument('--metadata', help='JSON metadata object.')
+    update_parser.add_argument('--json', action='store_true', help='Output raw JSON.')
+    update_parser.set_defaults(func=command_memory_update)
+
+    delete_parser = subparsers.add_parser('delete', help='Delete a memory by ID.')
+    delete_parser.add_argument('memory_id', help='Memory ID.')
+    delete_parser.add_argument('--json', action='store_true', help='Output raw JSON.')
+    delete_parser.set_defaults(func=command_memory_delete)
+
+    health_parser = subparsers.add_parser('health', help='Show runtime health status.')
+    health_parser.add_argument('--json', action='store_true', help='Output raw JSON.')
+    health_parser.set_defaults(func=command_memory_health)
 
     return parser
 
