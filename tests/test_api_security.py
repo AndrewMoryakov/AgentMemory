@@ -1,10 +1,5 @@
 import io
 import json
-import sys
-from unittest.mock import MagicMock
-
-sys.modules.setdefault("mem0", MagicMock())
-
 import unittest
 
 import agentmemory.api as agentmemory_api

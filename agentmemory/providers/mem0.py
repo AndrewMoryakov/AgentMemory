@@ -10,11 +10,14 @@ import sqlite3
 from threading import Lock
 from typing import Any
 
-from mem0 import Memory
+try:
+    from mem0 import Memory
+except ImportError:
+    Memory = None  # type: ignore[assignment, misc]
 try:
     from mem0.exceptions import ConfigurationError as Mem0ConfigurationError
     from mem0.exceptions import MemoryNotFoundError as Mem0MemoryNotFoundError
-except Exception:  # pragma: no cover
+except Exception:
     Mem0ConfigurationError = RuntimeError  # type: ignore[assignment]
     Mem0MemoryNotFoundError = LookupError  # type: ignore[assignment]
 
@@ -192,7 +195,11 @@ class Mem0Provider(BaseMemoryProvider):
         return api_key
 
     @lru_cache(maxsize=1)
-    def _load_memory(self) -> Memory:
+    def _load_memory(self):  # type: ignore[return]
+        if Memory is None:
+            raise ProviderConfigurationError(
+                "mem0ai package is not installed. Install it with: pip install mem0ai==1.0.10"
+            )
         api_key = self._get_openrouter_api_key()
         os.environ.setdefault("OPENAI_API_KEY", api_key)
         os.environ.setdefault("OPENAI_BASE_URL", OPENROUTER_BASE_URL)

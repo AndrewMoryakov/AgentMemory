@@ -13,8 +13,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from agentmemory.providers.localjson import LocalJsonProvider
-from agentmemory.providers.mem0 import Mem0Provider
 from agentmemory.providers.base import (
     BaseMemoryProvider,
     MemoryRecord,
@@ -87,6 +85,9 @@ load_dotenv()
 
 
 def provider_registry() -> dict[str, type[BaseMemoryProvider]]:
+    from agentmemory.providers.localjson import LocalJsonProvider
+    from agentmemory.providers.mem0 import Mem0Provider
+
     return {
         "localjson": LocalJsonProvider,
         "mem0": Mem0Provider,

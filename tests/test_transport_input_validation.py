@@ -1,8 +1,3 @@
-import sys
-from unittest.mock import MagicMock
-
-sys.modules.setdefault("mem0", MagicMock())
-
 import unittest
 
 from agentmemory.runtime.transport import (

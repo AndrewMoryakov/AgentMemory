@@ -12,6 +12,7 @@ class AgentMemoryApiTests(unittest.TestCase):
         handler.headers = {"Content-Length": str(len(body))}
         handler.rfile = io.BytesIO(body)
         handler.wfile = io.BytesIO()
+        handler.client_address = ("127.0.0.1", 54321)
         return handler
 
     def test_get_health_uses_shared_operation_registry(self) -> None:
