@@ -38,20 +38,19 @@ class AgentMemoryInteractiveTests(unittest.TestCase):
 
     def test_home_screen_contains_status_and_tips(self) -> None:
         text = agentmemory_interactive.render_home_screen(self.make_context())
-        self.assertIn('AgentMemory Home', text)
-        self.assertIn('Provider      mem0', text)
+        self.assertIn('AgentMemory', text)
+        self.assertIn('mem0', text)
         self.assertIn('http://127.0.0.1:8765/ui', text)
-        self.assertIn('Type / to open the command menu', text)
+        self.assertIn('/exit', text)
 
     def test_home_screen_mentions_basic_mode_when_menu_disabled(self) -> None:
         text = agentmemory_interactive.render_home_screen(self.make_context(prompt_menu_enabled=False))
-        self.assertIn('basic prompt mode', text)
+        self.assertIn('basic mode', text)
 
     def test_home_screen_renders_provider_notes_when_present(self) -> None:
         text = agentmemory_interactive.render_home_screen(
             self.make_context(provider_notes=("Provider requires scope for search.",))
         )
-        self.assertIn('Provider notes', text)
         self.assertIn('Provider requires scope for search.', text)
 
     def test_prompt_toolkit_availability_requires_tty(self) -> None:

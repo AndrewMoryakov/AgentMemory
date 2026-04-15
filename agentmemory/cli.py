@@ -505,13 +505,23 @@ def start_api_process(host: str, port: int) -> tuple[bool, str]:
         stdout_handle.close()
         stderr_handle.close()
 
-    for _ in range(40):
+    spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    use_spinner = sys.stdout.isatty()
+    for tick in range(40):
+        if use_spinner:
+            frame = spinner_frames[tick % len(spinner_frames)]
+            print(f'\r  {frame} Starting API on http://{host}:{port}...', end='', flush=True)
         time.sleep(0.25)
         if api_is_ready(host, port, timeout_seconds=1.0):
+            if use_spinner:
+                print('\r' + ' ' * 60 + '\r', end='', flush=True)
             listener_pid = listening_pid_for_api_port(host, port) or process.pid
             API_PID_FILE.write_text(str(listener_pid), encoding='ascii')
             write_api_state(pid=listener_pid, host=host, port=port)
             return True, f'AgentMemory API started with PID {listener_pid} on http://{host}:{port}. Logs: {API_LOG_FILE}, {API_ERR_FILE}'
+
+    if use_spinner:
+        print('\r' + ' ' * 60 + '\r', end='', flush=True)
 
     API_PID_FILE.unlink(missing_ok=True)
     remove_api_state()
@@ -688,7 +698,10 @@ def command_configure(args: argparse.Namespace) -> int:
         write_env(env_updates)
         print(ok(f'Updated provider environment in {ENV_PATH}'))
 
-    print(json.dumps(config, ensure_ascii=True, indent=2))
+    runtime = config.get("runtime", {})
+    print(info(f'Provider:  {runtime.get("provider", "unknown")}'))
+    print(info(f'API:       http://{runtime.get("api_host", "127.0.0.1")}:{runtime.get("api_port", 8765)}'))
+    print(info(f'Data dir:  {runtime.get("runtime_dir", "")}'))
     return 0
 
 
@@ -734,6 +747,9 @@ def command_doctor(_: argparse.Namespace) -> int:
     info_payload = runtime_info()
     provider = get_provider()
 
+    section = lambda title: print(f'\n  {color(title, "1")}')
+
+    section('Environment')
     print(ok(f'Project directory: {BASE_DIR}'))
     print(ok(f"Active config: {info_payload['config_path']}"))
     if ENV_PATH.exists():
@@ -742,25 +758,24 @@ def command_doctor(_: argparse.Namespace) -> int:
         print(info(f'Env file: not present at {ENV_PATH}'))
     print(ok(f'Virtual environment: {VENV_PYTHON}' if VENV_PYTHON.exists() else f'Virtual environment missing: {VENV_PYTHON}'))
 
-    print(info(f"Active provider: {info_payload['provider']}"))
-    print(info(f"Active profile: {info_payload.get('active_profile', 'default')}"))
+    section('Runtime')
+    print(info(f"Provider: {info_payload['provider']}"))
+    print(info(f"Profile: {info_payload.get('active_profile', 'default')} (source: {config_source})"))
     print(info(f"Runtime id: {info_payload.get('runtime_identity', {}).get('runtime_id', 'unknown')}"))
-    print(info(f"Config version: {info_payload.get('runtime_identity', {}).get('config_version', 'unknown')}"))
-    print(info(f'Config source: {config_source}'))
-    print(info(f"API host: {info_payload['api_host']}"))
-    print(info(f"API port: {info_payload['api_port']}"))
-    print(info(f"API status: {info_payload.get('api_runtime', {}).get('status', 'unknown')}"))
-    print(info(f"Recorded API PID: {info_payload.get('api_runtime', {}).get('recorded_pid', 'none')}"))
+
+    section('API')
+    api_status = info_payload.get('api_runtime', {}).get('status', 'unknown')
+    api_pid = info_payload.get('api_runtime', {}).get('recorded_pid', 'none')
+    print(info(f"Endpoint: http://{info_payload['api_host']}:{info_payload['api_port']}"))
+    print(info(f"Status: {api_status}") if api_status in ('running', 'available') else warn(f"Status: {api_status}"))
+    if api_pid and api_pid != 'none':
+        print(info(f"PID: {api_pid}"))
+
+    section('Capabilities')
     capabilities = capability_summary(info_payload.get('capabilities', {}))
-    print(info(f"Search mode: {capabilities['search_mode']}"))
-    print(info(f"Supports filters: {capabilities['supports_filters']}"))
-    print(info(f"Supports rerank: {capabilities['supports_rerank']}"))
-    print(info(f"Scope inventory: {capabilities['supports_scope_inventory']}"))
-    print(info(f"Search requires scope: {capabilities['requires_scope_for_search']}"))
-    print(info(f"List requires scope: {capabilities['requires_scope_for_list']}"))
-    print(info(f"Owner-process mode: {capabilities['supports_owner_process_mode']}"))
-    print(info(f"Transport mode: {info_payload.get('runtime_policy', {}).get('transport_mode', 'direct')}"))
-    print(info(f"Provider contract: {info_payload.get('provider_contract', {}).get('contract_version', 'unknown')}"))
+    print(info(f"Search: {capabilities['search_mode']}, filters: {capabilities['supports_filters']}, rerank: {capabilities['supports_rerank']}"))
+    print(info(f"Scope required: search={capabilities['requires_scope_for_search']}, list={capabilities['requires_scope_for_list']}"))
+    print(info(f"Transport: {info_payload.get('runtime_policy', {}).get('transport_mode', 'direct')}, contract: {info_payload.get('provider_contract', {}).get('contract_version', 'unknown')}"))
     print_provider_guidance(
         provider_guidance(
             info_payload['provider'],

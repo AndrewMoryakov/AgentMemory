@@ -3,11 +3,25 @@ import json
 import logging
 import sys
 
+from agentmemory.formatting import (
+    format_delete,
+    format_error,
+    format_health,
+    format_memory,
+    format_memory_list,
+    format_scopes,
+)
 from agentmemory.runtime.operation_adapters import cli_operation_source
 from agentmemory.runtime.operations import OPERATIONS
 from agentmemory.providers.base import ProviderError, ProviderValidationError
 
 logger = logging.getLogger(__name__)
+
+
+def _use_json(args: argparse.Namespace) -> bool:
+    if getattr(args, "json", False):
+        return True
+    return not (hasattr(sys.stdout, "isatty") and sys.stdout.isatty())
 
 
 def print_json(data):
@@ -25,6 +39,7 @@ def parse_metadata(raw):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="AgentMemory shared runtime CLI")
+    parser.add_argument("--json", action="store_true", help="Output raw JSON")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("health")
@@ -72,38 +87,46 @@ def main() -> int:
     delete_parser.add_argument("memory_id")
 
     args = parser.parse_args()
+    use_json = _use_json(args)
 
     try:
         if args.command == "health":
-            print_json(OPERATIONS["health"].execute(cli_operation_source("health", args, parse_json_arg=parse_metadata)))
+            result = OPERATIONS["health"].execute(cli_operation_source("health", args, parse_json_arg=parse_metadata))
+            print_json(result) if use_json else print(format_health(result))
             return 0
         if args.command == "add":
             result = OPERATIONS["add"].execute(cli_operation_source("add", args, parse_json_arg=parse_metadata))
-            print_json(result)
+            print_json(result) if use_json else print(format_memory(result))
             return 0
         if args.command == "list-scopes":
             result = OPERATIONS["list_scopes"].execute(cli_operation_source("list-scopes", args, parse_json_arg=parse_metadata))
-            print_json(result)
+            print_json(result) if use_json else print(format_scopes(result))
             return 0
         if args.command == "search":
             result = OPERATIONS["search"].execute(cli_operation_source("search", args, parse_json_arg=parse_metadata))
-            print_json(result)
+            print_json(result) if use_json else print(format_memory_list(result, show_score=True))
             return 0
         if args.command == "list":
             result = OPERATIONS["list"].execute(cli_operation_source("list", args, parse_json_arg=parse_metadata))
-            print_json(result)
+            print_json(result) if use_json else print(format_memory_list(result))
             return 0
         if args.command == "get":
-            print_json(OPERATIONS["get"].execute(cli_operation_source("get", args, parse_json_arg=parse_metadata)))
+            result = OPERATIONS["get"].execute(cli_operation_source("get", args, parse_json_arg=parse_metadata))
+            print_json(result) if use_json else print(format_memory(result))
             return 0
         if args.command == "update":
-            print_json(OPERATIONS["update"].execute(cli_operation_source("update", args, parse_json_arg=parse_metadata)))
+            result = OPERATIONS["update"].execute(cli_operation_source("update", args, parse_json_arg=parse_metadata))
+            print_json(result) if use_json else print(format_memory(result))
             return 0
         if args.command == "delete":
-            print_json(OPERATIONS["delete"].execute(cli_operation_source("delete", args, parse_json_arg=parse_metadata)))
+            result = OPERATIONS["delete"].execute(cli_operation_source("delete", args, parse_json_arg=parse_metadata))
+            print_json(result) if use_json else print(format_delete(result))
             return 0
     except ProviderError as exc:
-        logger.error("%s", exc)
+        if use_json:
+            print(json.dumps({"error": str(exc), "error_type": type(exc).__name__}, ensure_ascii=True, indent=2), file=sys.stderr)
+        else:
+            print(format_error(exc, command=args.command), file=sys.stderr)
         return 2
 
     return 1

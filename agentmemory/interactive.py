@@ -131,37 +131,42 @@ def normalize_command_line(raw: str) -> list[str]:
 
 
 def render_home_screen(context: InteractiveContext) -> str:
-    menu_state = 'live command menu enabled' if context.prompt_menu_enabled else 'basic prompt mode'
+    is_tty = sys.stdout.isatty()
+
+    def _c(code: str, text: str) -> str:
+        return f"\033[{code}m{text}\033[0m" if is_tty else text
+
+    bold = lambda t: _c("1", t)
+    dim = lambda t: _c("2", t)
+    green = lambda t: _c("32", t)
+    cyan = lambda t: _c("36", t)
+    yellow = lambda t: _c("33", t)
+
     notes_block = ''
     if context.provider_notes:
-        note_lines = '\n'.join(f'  {note}' for note in context.provider_notes)
-        notes_block = f'\nProvider notes\n{note_lines}\n'
-    return f'''AgentMemory Home
+        note_lines = '\n'.join(f'  {yellow("›")} {note}' for note in context.provider_notes)
+        notes_block = f'\n{notes_block}\n{note_lines}\n'
 
-Shared memory runtime for AI clients and scripts.
+    api_url = f'http://{context.api_host}:{context.api_port}'
+    menu_label = green('● enabled') if context.prompt_menu_enabled else dim('○ basic mode')
 
-Status
-  Provider      {context.provider}
-  API           http://{context.api_host}:{context.api_port}/ui
-  Config        {context.config_path.name}
-  Environment   {context.env_path.name}
-  Shell         {menu_state}
-{notes_block}
+    return f'''{bold("AgentMemory")}  {dim("shared memory runtime")}
 
-Quick actions
-  /doctor       Inspect provider, config, environment, and runtime health
-  /start        Start the local API
-  /ui           Start the API and open the console URL
-  /status       Check connected clients
-  /clients      Run client diagnostics
-  /snippets     Print MCP setup snippets
+{"╭─ Status ──────────────────────────────────────────╮" if is_tty else "Status"}
+{"│" if is_tty else ""}  Provider    {cyan(context.provider)}
+{"│" if is_tty else ""}  API         {api_url}/ui
+{"│" if is_tty else ""}  Config      {context.config_path.name}
+{"│" if is_tty else ""}  Completions {menu_label}
+{"╰──────────────────────────────────────────────────╯" if is_tty else ""}{notes_block}
+{bold("Quick actions")}
+  {cyan("/doctor")}     Run diagnostics
+  {cyan("/start")}      Start the local API
+  {cyan("/ui")}         Start API and open console URL
+  {cyan("/status")}     Check connected clients
+  {cyan("/snippets")}   Print MCP setup snippets
+  {cyan("/help")}       Full command reference
 
-Tips
-  Type / to open the command menu
-  Use arrow keys to select and Enter to run
-  Use /help for the full command reference
-  Use /exit to leave the shell
-'''.strip()
+{dim("Type / to open the command menu · /exit to leave")}'''.strip()
 
 
 
