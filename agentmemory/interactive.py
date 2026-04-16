@@ -37,6 +37,7 @@ SLASH_COMMANDS: dict[str, str] = {
     '/search': 'Search memories',
     '/add': 'Store a new memory',
     '/get': 'Get a memory by ID',
+    '/scope': 'Set, show, or clear session scope',
     '/scopes': 'List known scopes',
     '/health': 'Show runtime health',
     '/doctor': 'Run full diagnostics',
@@ -134,6 +135,14 @@ def normalize_command_line(raw: str) -> list[str]:
         'scopes': ['list-scopes'],
     }
 
+    if head == 'scope':
+        if not tail:
+            return ['scope', 'show']
+        sub = tail[0].lower()
+        if sub in {'set', 'show', 'clear'}:
+            return ['scope', sub, *tail[1:]]
+        # /scope alice → scope set --user-id alice
+        return ['scope', 'set', '--user-id', tail[0], *tail[1:]]
     if head == 'provider' and tail:
         return ['configure', '--provider', tail[0], *tail[1:]]
     if head == 'ui':

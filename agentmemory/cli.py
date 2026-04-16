@@ -56,6 +56,7 @@ from agentmemory.formatting import (
     format_memory_list,
     format_scopes,
 )
+from agentmemory.scope import apply_scope, clear_scope, has_scope, load_scope, save_scope, scope_label
 from agentmemory.certification.certify import certification_report, certification_report_json, list_targets, list_targets_json
 
 
@@ -960,6 +961,40 @@ def command_provider_certify(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Scope commands
+# ---------------------------------------------------------------------------
+
+
+def command_scope_set(args: argparse.Namespace) -> int:
+    user_id = getattr(args, "user_id", None)
+    agent_id = getattr(args, "agent_id", None)
+    run_id = getattr(args, "run_id", None)
+    if not any((user_id, agent_id, run_id)):
+        print(err("Provide at least one of --user-id, --agent-id, or --run-id"))
+        return 1
+    scope = save_scope(user_id=user_id, agent_id=agent_id, run_id=run_id)
+    parts = [f"{k}={v}" for k, v in scope.items() if v is not None]
+    print(ok(f"Scope set: {', '.join(parts)}"))
+    return 0
+
+
+def command_scope_show(_: argparse.Namespace) -> int:
+    scope = load_scope()
+    if not any(v is not None for v in scope.values()):
+        print(info("No active scope. Use: agentmemory scope set --user-id <user>"))
+        return 0
+    parts = [f"{k}={v}" for k, v in scope.items() if v is not None]
+    print(ok(f"Active scope: {', '.join(parts)}"))
+    return 0
+
+
+def command_scope_clear(_: argparse.Namespace) -> int:
+    clear_scope()
+    print(ok("Scope cleared."))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Data commands (memory operations via unified CLI)
 # ---------------------------------------------------------------------------
 
@@ -996,6 +1031,7 @@ def _data_error(exc: Exception, args: argparse.Namespace) -> int:
 
 
 def command_memory_add(args: argparse.Namespace) -> int:
+    apply_scope(args)
     try:
         result = OPERATIONS["add"].execute(cli_operation_source("add", args, parse_json_arg=_parse_json_arg))
         rc = _data_output(result, formatter=format_memory, args=args)
@@ -1007,6 +1043,7 @@ def command_memory_add(args: argparse.Namespace) -> int:
 
 
 def command_memory_search(args: argparse.Namespace) -> int:
+    apply_scope(args)
     try:
         result = OPERATIONS["search"].execute(cli_operation_source("search", args, parse_json_arg=_parse_json_arg))
         return _data_output(result, formatter=lambda r: format_memory_list(r, show_score=True), args=args)
@@ -1015,6 +1052,7 @@ def command_memory_search(args: argparse.Namespace) -> int:
 
 
 def command_memory_list(args: argparse.Namespace) -> int:
+    apply_scope(args)
     try:
         result = OPERATIONS["list"].execute(cli_operation_source("list", args, parse_json_arg=_parse_json_arg))
         rc = _data_output(result, formatter=format_memory_list, args=args)
@@ -1147,6 +1185,25 @@ def build_parser() -> argparse.ArgumentParser:
     provider_certify_parser.add_argument('--summary-only', action='store_true', help='Show only the certification verdict and test summary without the detailed test log.')
     provider_certify_parser.set_defaults(func=command_provider_certify)
 
+    # --- Scope commands ---
+
+    scope_parser = subparsers.add_parser('scope', help='Manage session scope (user/agent/run context).')
+    scope_subs = scope_parser.add_subparsers(dest='scope_command')
+
+    scope_set_parser = scope_subs.add_parser('set', help='Set the active scope.')
+    scope_set_parser.add_argument('--user-id', help='User scope.')
+    scope_set_parser.add_argument('--agent-id', help='Agent scope.')
+    scope_set_parser.add_argument('--run-id', help='Run scope.')
+    scope_set_parser.set_defaults(func=command_scope_set)
+
+    scope_show_parser = scope_subs.add_parser('show', help='Show the active scope.')
+    scope_show_parser.set_defaults(func=command_scope_show)
+
+    scope_clear_parser = scope_subs.add_parser('clear', help='Clear the active scope.')
+    scope_clear_parser.set_defaults(func=command_scope_clear)
+
+    scope_parser.set_defaults(func=command_scope_show)
+
     # --- Data commands (memory operations) ---
 
     add_parser = subparsers.add_parser('add', help='Store a new memory.')
@@ -1261,7 +1318,9 @@ def run_interactive_shell() -> int:
 
 
     while True:
-        raw = interactive_input('agentmemory> ', session=session)
+        label = scope_label()
+        prompt_text = f'agentmemory[{label}]> ' if label else 'agentmemory> '
+        raw = interactive_input(prompt_text, session=session)
         if not raw.strip():
             continue
         lowered = raw.strip().lower()
