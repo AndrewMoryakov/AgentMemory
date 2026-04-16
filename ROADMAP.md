@@ -652,6 +652,50 @@ Longer-term product ladder:
 - full desktop app packaging
 - enterprise auth
 - multi-tenant remote hosting
+
+## Architecture Notes: Memory Lifecycle (Archive / Stale / Tags)
+
+Three implementation strategies were considered for archive, stale, and tags.
+
+### Option A: Runtime Overlay
+
+Archive/stale/tags stored in a separate runtime layer (like `admin.py` already does for `pinned`). Provider knows nothing about these fields.
+
+```
+Provider: {id, memory, metadata, user_id, ...}
+Runtime:  {id → pinned, archived, stale, tags, reviewed_at}
+```
+
+Pros: works with any provider without contract changes.
+Cons: no provider-level filtering; post-filtering is slow at scale.
+
+### Option B: Provider Contract Extension
+
+Archive/stale/tags become part of `MemoryRecord` and `ProviderContract`. Each provider implements filtering natively.
+
+```
+Provider: {id, memory, metadata, ..., archived, stale, tags}
+```
+
+Pros: efficient storage-level filtering, semantic search can exclude archived.
+Cons: every provider must implement, complicates the contract.
+
+### Option C: Metadata Convention (Recommended)
+
+Tags and archive live in `metadata` using reserved key prefixes. Runtime layer knows about these keys and filters automatically. No provider contract changes needed, but providers with metadata filter support can filter efficiently.
+
+```python
+# add --tags ui,design → metadata: {"_tags": ["ui", "design"]}
+# archive             → metadata: {"_archived": true}
+# list                → auto-filters _archived != true
+```
+
+Pros: least invasive, works with both current providers today, no contract changes.
+Cons: relies on metadata filter support; providers without it need post-filtering.
+
+### Decision
+
+Not yet decided. Option C is the recommended starting point. Revisit when implementing Phase 2 review workflow.
 - graph visualization from day one
 - complex analytics dashboards
 
