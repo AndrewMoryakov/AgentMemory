@@ -48,7 +48,6 @@ def apply_scope(args: Any) -> None:
     """Fill in missing scope fields from saved scope."""
     scope = load_scope()
     for key in SCOPE_KEYS:
-        arg_key = key.replace("_", "-")
-        current = getattr(args, key.replace("-", "_"), None)
+        current = getattr(args, key, None)
         if current is None and scope.get(key) is not None:
-            setattr(args, key.replace("-", "_"), scope[key])
+            setattr(args, key, scope[key])

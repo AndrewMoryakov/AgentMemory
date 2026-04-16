@@ -57,6 +57,7 @@ from agentmemory.formatting import (
     format_scopes,
 )
 from agentmemory.scope import apply_scope, clear_scope, has_scope, load_scope, save_scope, scope_label
+from agentmemory.providers.base import ProviderError, ProviderValidationError
 from agentmemory.certification.certify import certification_report, certification_report_json, list_targets, list_targets_json
 
 
@@ -1004,7 +1005,6 @@ def _parse_json_arg(raw):
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
-        from agentmemory.providers.base import ProviderValidationError
         raise ProviderValidationError(f"Invalid JSON: {exc.msg}") from exc
 
 
@@ -1038,7 +1038,7 @@ def command_memory_add(args: argparse.Namespace) -> int:
         if not _data_use_json(args):
             print(info("Next: agentmemory search \"<query>\" or agentmemory list"))
         return rc
-    except Exception as exc:
+    except ProviderError as exc:
         return _data_error(exc, args)
 
 
@@ -1047,7 +1047,7 @@ def command_memory_search(args: argparse.Namespace) -> int:
     try:
         result = OPERATIONS["search"].execute(cli_operation_source("search", args, parse_json_arg=_parse_json_arg))
         return _data_output(result, formatter=lambda r: format_memory_list(r, show_score=True), args=args)
-    except Exception as exc:
+    except ProviderError as exc:
         return _data_error(exc, args)
 
 
@@ -1059,7 +1059,7 @@ def command_memory_list(args: argparse.Namespace) -> int:
         if not _data_use_json(args) and not result:
             print(info("Try: agentmemory add --message \"<text>\" --user-id <user>"))
         return rc
-    except Exception as exc:
+    except ProviderError as exc:
         return _data_error(exc, args)
 
 
@@ -1067,7 +1067,7 @@ def command_memory_get(args: argparse.Namespace) -> int:
     try:
         result = OPERATIONS["get"].execute(cli_operation_source("get", args, parse_json_arg=_parse_json_arg))
         return _data_output(result, formatter=format_memory, args=args)
-    except Exception as exc:
+    except ProviderError as exc:
         return _data_error(exc, args)
 
 
@@ -1075,7 +1075,7 @@ def command_memory_update(args: argparse.Namespace) -> int:
     try:
         result = OPERATIONS["update"].execute(cli_operation_source("update", args, parse_json_arg=_parse_json_arg))
         return _data_output(result, formatter=format_memory, args=args)
-    except Exception as exc:
+    except ProviderError as exc:
         return _data_error(exc, args)
 
 
@@ -1083,7 +1083,7 @@ def command_memory_delete(args: argparse.Namespace) -> int:
     try:
         result = OPERATIONS["delete"].execute(cli_operation_source("delete", args, parse_json_arg=_parse_json_arg))
         return _data_output(result, formatter=format_delete, args=args)
-    except Exception as exc:
+    except ProviderError as exc:
         return _data_error(exc, args)
 
 
@@ -1091,7 +1091,7 @@ def command_memory_health(args: argparse.Namespace) -> int:
     try:
         result = OPERATIONS["health"].execute(cli_operation_source("health", args, parse_json_arg=_parse_json_arg))
         return _data_output(result, formatter=format_health, args=args)
-    except Exception as exc:
+    except ProviderError as exc:
         return _data_error(exc, args)
 
 

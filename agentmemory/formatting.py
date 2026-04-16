@@ -1,6 +1,7 @@
 """Human-readable output formatters for CLI commands."""
 from __future__ import annotations
 
+import json
 import re
 import sys
 from datetime import datetime
@@ -105,7 +106,6 @@ def format_memory(record: dict[str, Any]) -> str:
     pairs.append(("Created", _short_ts(record.get("created_at"))))
     pairs.append(("Updated", _short_ts(record.get("updated_at"))))
     if record.get("metadata"):
-        import json
         pairs.append(("Metadata", json.dumps(record["metadata"], ensure_ascii=False)))
 
     label_width = max(len(k) for k, _ in pairs)
@@ -138,14 +138,10 @@ def format_memory_list(records: list[dict[str, Any]], *, show_score: bool = Fals
         rows.append(row)
 
     count = len(records)
-    noun = "result" if show_score else "memory"
-    suffix = "ies" if noun == "memory" and count != 1 else ("s" if count != 1 and noun != "memory" else "")
-    if noun == "memory" and count != 1:
-        count_line = f"\n  {dim(f'{count} memories')}"
-    elif noun == "memory":
-        count_line = f"\n  {dim('1 memory')}"
-    else:
+    if show_score:
         count_line = f"\n  {dim(f'{count} result' + ('s' if count != 1 else ''))}"
+    else:
+        count_line = f"\n  {dim(f'{count} memor' + ('ies' if count != 1 else 'y'))}"
 
     return _columns(rows) + count_line
 
