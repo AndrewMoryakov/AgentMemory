@@ -161,14 +161,20 @@ class Mem0Provider(BaseMemoryProvider):
         return {"transport_mode": "owner_process_proxy"}
 
     def provider_contract(self) -> ProviderContract:
+        # Empirically mem0 on a qdrant backend hard-deletes: records are
+        # removed from the vector store immediately and do not reappear in
+        # list/search. Writes are visible to subsequent reads as soon as the
+        # proxy ack returns, so callers observe "immediate" semantics even
+        # though the transport is owner_process_proxy. Advertise both truths
+        # so callers don't have to guess.
         return {
             "contract_version": "v2",
             "record_shape": "memory_record_v1",
             "scope_kinds": ["user", "agent", "run"],
             "consistency": "immediate",
-            "write_visibility": "owner_process_proxy",
+            "write_visibility": "immediate",
             "update_semantics": "replace",
-            "delete_semantics": "provider_defined",
+            "delete_semantics": "hard_delete",
             "filter_semantics": "record_and_metadata",
             "metadata_value_policy": "json_object",
             "supports_background_ingest": False,
@@ -487,10 +493,17 @@ class Mem0Provider(BaseMemoryProvider):
             return ProviderConfigurationError(str(exc))
 
         message = str(exc)
-        if "At least one of 'user_id', 'agent_id', or 'run_id' must be provided." in message:
+        normalized = message.lower()
+        if "at least one of 'user_id', 'agent_id', or 'run_id' must be provided." in normalized:
             return ProviderScopeRequiredError(message)
-        if "already accessed by another instance of Qdrant client" in message:
+        if "already accessed by another instance of qdrant client" in normalized:
             return ProviderUnavailableError(message)
+        # Record-absence errors from mem0's internal layers surface as generic
+        # exceptions whose only distinguishing feature is the message. Treat
+        # "<id> not found" / "does not exist" as MemoryNotFoundError so retries
+        # and idempotent deletes aren't misclassified as transport failures.
+        if ("not found" in normalized) or ("does not exist" in normalized):
+            return MemoryNotFoundError(message)
         if isinstance(exc, ProviderValidationError):
             return exc
         return ProviderUnavailableError(message)

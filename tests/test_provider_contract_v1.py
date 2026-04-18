@@ -186,13 +186,22 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("requires --user-id, --agent-id, or --run-id for search", stderr_buffer.getvalue())
 
-    def test_cli_search_rejects_unsupported_rerank_before_provider_call(self) -> None:
+    def test_cli_search_coerces_unsupported_rerank_before_provider_call(self) -> None:
+        # Per DEFECT-01 the capability gap no longer raises; the dispatcher
+        # silently coerces rerank=True to False so the tool's default isn't
+        # hostile to providers that lack rerank.
         original_argv = sys.argv
         original_stdout = sys.stdout
         original_stderr = sys.stderr
         original_capabilities = agentmemory_operations.active_provider_capabilities
         original_provider_name = agentmemory_operations.active_provider_name
-        original_search_spec = agentmemory_operations.OPERATIONS["search"]
+        original_memory_search = agentmemory_operations.memory_search
+        captured: dict = {}
+
+        def fake_memory_search(**kwargs):
+            captured.update(kwargs)
+            return []
+
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
         try:
@@ -214,7 +223,7 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
                 "supports_scope_inventory": True,
             }
             agentmemory_operations.active_provider_name = lambda: "localjson"  # type: ignore[assignment]
-            agentmemory_operations.OPERATIONS["search"] = original_search_spec
+            agentmemory_operations.memory_search = fake_memory_search  # type: ignore[assignment]
             rc = agentmemory_cli.main()
         finally:
             sys.argv = original_argv
@@ -222,10 +231,11 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
             sys.stderr = original_stderr
             agentmemory_operations.active_provider_capabilities = original_capabilities  # type: ignore[assignment]
             agentmemory_operations.active_provider_name = original_provider_name  # type: ignore[assignment]
-            agentmemory_operations.OPERATIONS["search"] = original_search_spec
+            agentmemory_operations.memory_search = original_memory_search  # type: ignore[assignment]
 
-        self.assertEqual(rc, 2)
-        self.assertIn("does not support rerank", stderr_buffer.getvalue())
+        self.assertEqual(rc, 0)
+        self.assertNotIn("does not support rerank", stderr_buffer.getvalue())
+        self.assertEqual(captured.get("rerank"), False)
 
 
 if __name__ == "__main__":

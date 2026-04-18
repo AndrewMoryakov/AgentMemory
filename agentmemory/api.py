@@ -1,8 +1,11 @@
+import atexit
 import base64
 import hmac
 import json
 import os
+import signal
 import socket
+import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,7 +23,15 @@ from agentmemory.runtime.admin import (
 )
 from agentmemory.runtime.operation_adapters import http_operation_source
 from agentmemory.runtime.operations import OPERATIONS
-from agentmemory.runtime.config import BASE_DIR, current_api_host, current_api_port
+from agentmemory.runtime.config import (
+    API_PID_FILE,
+    API_STATE_FILE,
+    BASE_DIR,
+    current_api_host,
+    current_api_port,
+    remove_api_state,
+    write_api_state,
+)
 from agentmemory.runtime.transport import (
     provider_error_payload,
     provider_error_status,
@@ -486,13 +497,48 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": str(exc)})
 
 
+def _record_supervisor_files(*, host: str, port: int) -> None:
+    API_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    API_PID_FILE.write_text(str(os.getpid()), encoding="ascii")
+    write_api_state(pid=os.getpid(), host=host, port=port)
+
+
+def _cleanup_supervisor_files() -> None:
+    try:
+        API_PID_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+    try:
+        remove_api_state()
+    except Exception:
+        pass
+
+
+def _install_signal_handlers() -> None:
+    def handler(signum, _frame):
+        _cleanup_supervisor_files()
+        sys.exit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, handler)
+        except (ValueError, OSError):
+            pass
+
+
 def main():
     os.environ["AGENTMEMORY_OWNER_PROCESS"] = "1"
     api_host = current_api_host()
     api_port = current_api_port()
     server = ThreadingHTTPServer((api_host, api_port), Handler)
+    _record_supervisor_files(host=api_host, port=api_port)
+    atexit.register(_cleanup_supervisor_files)
+    _install_signal_handlers()
     print(f"AgentMemory API listening on http://{api_host}:{api_port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        _cleanup_supervisor_files()
 
 
 if __name__ == "__main__":

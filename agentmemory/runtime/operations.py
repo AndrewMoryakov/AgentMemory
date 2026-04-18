@@ -27,6 +27,7 @@ from agentmemory.runtime.config import (
     memory_update,
 )
 from agentmemory.runtime.transport import execute_transport_operation, validate_and_build_list_kwargs, validate_and_build_search_kwargs
+from agentmemory.providers.base import MemoryNotFoundError
 
 
 @dataclass(frozen=True)
@@ -47,21 +48,46 @@ def _execute_health(_: dict[str, Any]) -> Any:
     )
 
 
+def _original_input_text(source: dict[str, Any]) -> str | None:
+    raw = source.get("messages")
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list) and raw:
+        first = raw[0]
+        if isinstance(first, dict):
+            content = first.get("content")
+            if isinstance(content, str):
+                return content
+    text = source.get("text")
+    return text if isinstance(text, str) else None
+
+
 def _execute_add(source: dict[str, Any]) -> Any:
+    infer_requested = bool(source.get("infer", False))
     kwargs = {
         "messages": source["messages"],
         "user_id": source.get("user_id"),
         "agent_id": source.get("agent_id"),
         "run_id": source.get("run_id"),
         "metadata": source.get("metadata"),
-        "infer": source.get("infer", True),
+        "infer": infer_requested,
         "memory_type": source.get("memory_type"),
     }
-    return execute_transport_operation(
+    result = execute_transport_operation(
         use_proxy=should_proxy_to_api(),
         local_call=lambda: memory_add(**kwargs),
         proxy_call=lambda: proxy_add(**kwargs),
     )
+    if infer_requested and isinstance(result, dict):
+        original = _original_input_text(source)
+        stored = result.get("memory")
+        if isinstance(original, str) and isinstance(stored, str) and original != stored:
+            enriched = dict(result)
+            enriched["transformed"] = True
+            enriched["original_text"] = original
+            enriched["stored_text"] = stored
+            return enriched
+    return result
 
 
 def _execute_list_scopes(source: dict[str, Any]) -> Any:
@@ -129,11 +155,22 @@ def _execute_update(source: dict[str, Any]) -> Any:
 
 def _execute_delete(source: dict[str, Any]) -> Any:
     memory_id = source["memory_id"]
-    return execute_transport_operation(
-        use_proxy=should_proxy_to_api(),
-        local_call=lambda: memory_delete(memory_id=memory_id),
-        proxy_call=lambda: proxy_delete(memory_id=memory_id),
-    )
+    try:
+        return execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_delete(memory_id=memory_id),
+            proxy_call=lambda: proxy_delete(memory_id=memory_id),
+        )
+    except MemoryNotFoundError:
+        # Idempotent delete: a second delete on an already-removed record is
+        # a success-with-no-op, not a transport failure. The report "v2"
+        # explicitly allows this shape (deleted=false, already_absent=true).
+        return {
+            "id": memory_id,
+            "deleted": False,
+            "already_absent": True,
+            "provider": active_provider_name(),
+        }
 
 
 OPERATIONS: dict[str, OperationSpec] = {
@@ -149,7 +186,13 @@ OPERATIONS: dict[str, OperationSpec] = {
         name="add",
         mcp_name="memory_add",
         title="Add Memory",
-        description="Store a new memory from plain text for a user, agent, or run.",
+        description=(
+            "Store a new memory for a user, agent, or run. By default the text is stored "
+            "verbatim (infer=false). Pass infer=true to let the provider's LLM extract, "
+            "rewrite, or deduplicate the text before storage; when that happens the response "
+            "includes transformed=true with original_text and stored_text so the rewrite "
+            "is observable. infer=true costs one LLM call per write."
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -158,7 +201,15 @@ OPERATIONS: dict[str, OperationSpec] = {
                 "agent_id": {"type": "string"},
                 "run_id": {"type": "string"},
                 "metadata": {"type": "object"},
-                "infer": {"type": "boolean", "default": True},
+                "infer": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "When false (default) the provider stores the input text verbatim. "
+                        "When true, the provider may run an LLM over the input to extract or "
+                        "rewrite memory-worthy content; stored text may differ from input."
+                    ),
+                },
                 "memory_type": {"type": "string"},
             },
             "required": ["text"],

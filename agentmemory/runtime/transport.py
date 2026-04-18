@@ -97,6 +97,11 @@ def validate_and_build_search_kwargs(
     default_limit: int = 10,
 ) -> dict[str, Any]:
     kwargs = build_search_kwargs(source, default_limit=default_limit)
+    # Capability-aware coercion of rerank: the tool schema defaults rerank=true
+    # for callers, but a provider that doesn't advertise rerank shouldn't make
+    # the default explode. Coerce silently instead of raising.
+    if kwargs["rerank"] and not capabilities["supports_rerank"]:
+        kwargs["rerank"] = False
     validate_search_request(
         provider_name=provider_name,
         capabilities=capabilities,
