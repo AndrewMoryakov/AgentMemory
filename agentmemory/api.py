@@ -1,3 +1,4 @@
+import base64
 import hmac
 import json
 import os
@@ -5,9 +6,10 @@ import socket
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from agentmemory import mcp as mcp_server
+from agentmemory import oauth as oauth_state
 from agentmemory.runtime.admin import (
     admin_stats,
     delete_admin_memory,
@@ -82,14 +84,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(status, {"error": str(exc), "error_type": exc.__class__.__name__})
 
+    def _public_base_url(self) -> str:
+        override = os.environ.get("AGENTMEMORY_PUBLIC_URL", "").strip().rstrip("/")
+        if override:
+            return override
+        scheme = (self.headers.get("X-Forwarded-Proto") or "http").split(",")[0].strip() or "http"
+        host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "").split(",")[0].strip()
+        prefix = (self.headers.get("X-Forwarded-Prefix") or "").rstrip("/")
+        return f"{scheme}://{host}{prefix}"
+
     def _is_authorized(self) -> bool:
         expected = _configured_token()
-        if expected is None:
+        oauth_on = oauth_state.oauth_enabled()
+        if expected is None and not oauth_on:
             return True
         header = self.headers.get("Authorization", "")
-        if header.lower().startswith("bearer "):
-            presented = header[7:].strip()
-            return hmac.compare_digest(presented, expected)
+        if not header.lower().startswith("bearer "):
+            return False
+        presented = header[7:].strip()
+        if expected is not None and hmac.compare_digest(presented, expected):
+            return True
+        if oauth_on and oauth_state.validate_access_token(presented):
+            return True
         return False
 
     def _require_auth(self) -> bool:
@@ -97,7 +113,15 @@ class Handler(BaseHTTPRequestHandler):
             return True
         try:
             self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Bearer realm="agentmemory"')
+            if oauth_state.oauth_enabled():
+                base = self._public_base_url()
+                metadata_url = f"{base}/.well-known/oauth-protected-resource"
+                self.send_header(
+                    "WWW-Authenticate",
+                    f'Bearer realm="agentmemory", resource_metadata="{metadata_url}"',
+                )
+            else:
+                self.send_header("WWW-Authenticate", 'Bearer realm="agentmemory"')
             self.send_header("Content-Type", "application/json; charset=utf-8")
             body = json.dumps({"error": "Unauthorized", "error_type": "AuthRequired"}).encode("utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -107,6 +131,145 @@ class Handler(BaseHTTPRequestHandler):
             if not self._client_disconnected(exc):
                 raise
         return False
+
+    def _handle_oauth_metadata(self) -> None:
+        base = self._public_base_url()
+        self._send(200, {
+            "issuer": base,
+            "authorization_endpoint": f"{base}/oauth/authorize",
+            "token_endpoint": f"{base}/oauth/token",
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code"],
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+            "scopes_supported": ["mcp"],
+        })
+
+    def _handle_resource_metadata(self) -> None:
+        base = self._public_base_url()
+        self._send(200, {
+            "resource": f"{base}/mcp",
+            "authorization_servers": [base],
+            "bearer_methods_supported": ["header"],
+            "scopes_supported": ["mcp"],
+        })
+
+    def _handle_oauth_authorize(self, params: dict[str, list[str]]) -> None:
+        creds = oauth_state.client_credentials()
+        if creds is None:
+            self._send(501, {"error": "oauth_disabled"})
+            return
+        expected_client_id, _ = creds
+
+        def _p(name: str, default: str = "") -> str:
+            return (params.get(name) or [default])[0]
+
+        given_client_id = _p("client_id")
+        redirect_uri = _p("redirect_uri")
+        response_type = _p("response_type")
+        code_challenge = _p("code_challenge")
+        code_challenge_method = _p("code_challenge_method", "S256")
+        state = _p("state")
+        scope = _p("scope") or None
+        resource = _p("resource") or None
+
+        if given_client_id != expected_client_id:
+            self._send(400, {"error": "invalid_client"})
+            return
+        if not (redirect_uri.startswith("https://") or redirect_uri.startswith("http://127.0.0.1") or redirect_uri.startswith("http://localhost")):
+            self._send(400, {"error": "invalid_request", "error_description": "redirect_uri must be https or loopback"})
+            return
+        if response_type != "code":
+            self._send(400, {"error": "unsupported_response_type"})
+            return
+        if not code_challenge:
+            self._send(400, {"error": "invalid_request", "error_description": "code_challenge required"})
+            return
+        if code_challenge_method.upper() not in {"S256", "PLAIN"}:
+            self._send(400, {"error": "invalid_request", "error_description": "unsupported code_challenge_method"})
+            return
+
+        code = oauth_state.issue_auth_code(
+            client_id=expected_client_id,
+            redirect_uri=redirect_uri,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+            scope=scope,
+            resource=resource,
+        )
+
+        sep = "&" if "?" in redirect_uri else "?"
+        location = f"{redirect_uri}{sep}code={quote(code, safe='')}"
+        if state:
+            location += f"&state={quote(state, safe='')}"
+
+        try:
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        except Exception as exc:
+            if not self._client_disconnected(exc):
+                raise
+
+    def _handle_oauth_token(self) -> None:
+        creds = oauth_state.client_credentials()
+        if creds is None:
+            self._send(501, {"error": "oauth_disabled"})
+            return
+        expected_client_id, _ = creds
+
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length).decode("utf-8") if length else ""
+        form = parse_qs(raw, keep_blank_values=True)
+
+        def _f(name: str, default: str = "") -> str:
+            return (form.get(name) or [default])[0]
+
+        given_client_id = _f("client_id")
+        given_client_secret = _f("client_secret")
+
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header.lower().startswith("basic "):
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                basic_id, _, basic_secret = decoded.partition(":")
+                if not given_client_id:
+                    given_client_id = basic_id
+                if not given_client_secret:
+                    given_client_secret = basic_secret
+            except Exception:
+                pass
+
+        if given_client_id != expected_client_id or not oauth_state.verify_client_secret(given_client_secret):
+            self._send(401, {"error": "invalid_client"})
+            return
+
+        grant_type = _f("grant_type")
+        if grant_type != "authorization_code":
+            self._send(400, {"error": "unsupported_grant_type"})
+            return
+
+        entry = oauth_state.consume_auth_code(
+            code=_f("code"),
+            client_id=expected_client_id,
+            redirect_uri=_f("redirect_uri"),
+            code_verifier=_f("code_verifier"),
+        )
+        if entry is None:
+            self._send(400, {"error": "invalid_grant"})
+            return
+
+        token, ttl = oauth_state.issue_access_token(client_id=expected_client_id, scope=entry.get("scope"))
+        payload = {
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_in": ttl,
+        }
+        if entry.get("scope"):
+            payload["scope"] = entry["scope"]
+        self._send(200, payload)
 
     def _serve_web_file(self, relative_path: str, content_type: str) -> bool:
         path = (WEB_DIR / relative_path).resolve()
@@ -151,6 +314,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, OPERATIONS["health"].execute(http_operation_source("health")))
                 else:
                     self._send(200, {"ok": True})
+                return
+            if parsed.path == "/.well-known/oauth-authorization-server":
+                self._handle_oauth_metadata()
+                return
+            if parsed.path == "/.well-known/oauth-protected-resource":
+                self._handle_resource_metadata()
+                return
+            if parsed.path == "/oauth/authorize":
+                self._handle_oauth_authorize(params)
                 return
             if not self._require_auth():
                 return
@@ -203,6 +375,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if self.path == "/oauth/token":
+                self._handle_oauth_token()
+                return
             if not self._require_auth():
                 return
             if self.path == "/mcp":
