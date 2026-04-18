@@ -315,10 +315,10 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._send(200, {"ok": True})
                 return
-            if parsed.path == "/.well-known/oauth-authorization-server":
+            if parsed.path == "/.well-known/oauth-authorization-server" or parsed.path.startswith("/.well-known/oauth-authorization-server/"):
                 self._handle_oauth_metadata()
                 return
-            if parsed.path == "/.well-known/oauth-protected-resource":
+            if parsed.path == "/.well-known/oauth-protected-resource" or parsed.path.startswith("/.well-known/oauth-protected-resource/"):
                 self._handle_resource_metadata()
                 return
             if parsed.path == "/oauth/authorize":

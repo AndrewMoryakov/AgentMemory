@@ -19,6 +19,18 @@ http:
       middlewares:
         - agentmemory-strip
 
+    # OAuth/MCP clients (Claude.ai, ChatGPT) do RFC 8414/9728 discovery
+    # at the host root, not under the /agentmemory prefix. Match those
+    # root well-known paths explicitly and forward without stripping so
+    # the app can handle both path-infixed and host-root variants.
+    agentmemory-wellknown:
+      rule: "Host(`andrewm.ru`) && PathPrefix(`/.well-known/oauth-`)"
+      entrypoints: [websecure]
+      tls:
+        certResolver: letsencrypt
+      service: agentmemory
+      priority: 150
+
   services:
     agentmemory:
       loadBalancer:
