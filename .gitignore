@@ -1,6 +1,7 @@
 .env
 .\\agentmemory.config.json
 agentmemory.config.json
+!deploy/agentmemory.config.json
 .venv/
 __pycache__/
 *.py[cod]

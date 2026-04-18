@@ -1,0 +1,47 @@
+# AgentMemory server deployment.
+#
+# Runs the HTTP API + remote-MCP endpoint behind the existing Traefik
+# ingress on andrewm.ru/agentmemory/. The container joins the
+# netbird_netbird bridge so Traefik can reach it via `http://agentmemory:8765`,
+# mirroring how the other NetBird-local services are routed. Public
+# ingress is terminated by Traefik only; no host port is exposed.
+#
+# Required env (see .env.example):
+#   AGENTMEMORY_API_TOKEN    strong bearer token, shared with MCP clients
+#   OPENROUTER_API_KEY       only needed for the mem0 provider
+#
+# Usage (on the server):
+#   cd /opt/agentmemory
+#   cp .env.example .env && edit .env
+#   docker compose -f deploy/docker-compose.yml up -d --build
+
+services:
+  agentmemory:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: agentmemory:latest
+    container_name: agentmemory
+    restart: unless-stopped
+    environment:
+      AGENTMEMORY_API_HOST: "0.0.0.0"
+      AGENTMEMORY_API_PORT: "8765"
+      AGENTMEMORY_API_TOKEN: "${AGENTMEMORY_API_TOKEN:?set AGENTMEMORY_API_TOKEN in .env}"
+      AGENTMEMORY_DISABLE_UI: "1"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    networks:
+      - traefik
+    volumes:
+      - agentmemory_data:/app/data
+      # Seed runtime config into the image's BASE_DIR so the provider
+      # starts in localjson mode without a separate `configure` step.
+      # Edit deploy/agentmemory.config.json to switch provider.
+      - ./agentmemory.config.json:/app/agentmemory.config.json:ro
+
+networks:
+  traefik:
+    external: true
+    name: netbird_netbird
+
+volumes:
+  agentmemory_data:

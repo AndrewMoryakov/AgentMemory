@@ -1,10 +1,13 @@
+import hmac
 import json
 import os
 import socket
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from agentmemory import mcp as mcp_server
 from agentmemory.runtime.admin import (
     admin_stats,
     delete_admin_memory,
@@ -27,6 +30,15 @@ from agentmemory.providers.base import (
 )
 
 WEB_DIR = BASE_DIR / "web"
+
+
+def _configured_token() -> str | None:
+    token = os.environ.get("AGENTMEMORY_API_TOKEN", "").strip()
+    return token or None
+
+
+def _ui_disabled() -> bool:
+    return os.environ.get("AGENTMEMORY_DISABLE_UI", "").strip() in {"1", "true", "yes"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -70,6 +82,32 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(status, {"error": str(exc), "error_type": exc.__class__.__name__})
 
+    def _is_authorized(self) -> bool:
+        expected = _configured_token()
+        if expected is None:
+            return True
+        header = self.headers.get("Authorization", "")
+        if header.lower().startswith("bearer "):
+            presented = header[7:].strip()
+            return hmac.compare_digest(presented, expected)
+        return False
+
+    def _require_auth(self) -> bool:
+        if self._is_authorized():
+            return True
+        try:
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Bearer realm="agentmemory"')
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            body = json.dumps({"error": "Unauthorized", "error_type": "AuthRequired"}).encode("utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            if not self._client_disconnected(exc):
+                raise
+        return False
+
     def _serve_web_file(self, relative_path: str, content_type: str) -> bool:
         path = (WEB_DIR / relative_path).resolve()
         try:
@@ -91,16 +129,30 @@ class Handler(BaseHTTPRequestHandler):
         params = parse_qs(parsed.query)
         try:
             if parsed.path in {"/", "/ui", "/ui/"}:
+                if _ui_disabled():
+                    self._send(404, {"error": "UI disabled"})
+                    return
                 self._serve_web_file("index.html", "text/html; charset=utf-8")
                 return
             if parsed.path == "/ui/app.js":
+                if _ui_disabled():
+                    self._send(404, {"error": "UI disabled"})
+                    return
                 self._serve_web_file("app.js", "application/javascript; charset=utf-8")
                 return
             if parsed.path == "/ui/styles.css":
+                if _ui_disabled():
+                    self._send(404, {"error": "UI disabled"})
+                    return
                 self._serve_web_file("styles.css", "text/css; charset=utf-8")
                 return
             if parsed.path == "/health":
-                self._send(200, OPERATIONS["health"].execute(http_operation_source("health")))
+                if self._is_authorized():
+                    self._send(200, OPERATIONS["health"].execute(http_operation_source("health")))
+                else:
+                    self._send(200, {"ok": True})
+                return
+            if not self._require_auth():
                 return
             if parsed.path == "/admin/stats":
                 self._send(200, admin_stats(limit=int(params.get("limit", [500])[0])))
@@ -151,6 +203,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if not self._require_auth():
+                return
+            if self.path == "/mcp":
+                self._handle_mcp_post()
+                return
             if self.path.startswith("/admin/memories/") and self.path.endswith("/pin"):
                 memory_id = self.path.removeprefix("/admin/memories/").removesuffix("/pin").rstrip("/")
                 payload = self._read_json()
@@ -179,8 +236,42 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send(500, {"error": str(exc)})
 
+    def _handle_mcp_post(self) -> None:
+        try:
+            incoming = self._read_json()
+        except json.JSONDecodeError as exc:
+            self._send(400, {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {exc}"}})
+            return
+
+        try:
+            if isinstance(incoming, list):
+                responses = []
+                for item in incoming:
+                    response = mcp_server.handle_request(item)
+                    if response is not None:
+                        responses.append(response)
+                if not responses:
+                    self.send_response(204)
+                    self.end_headers()
+                    return
+                self._send(200, responses)
+                return
+
+            response = mcp_server.handle_request(incoming)
+            if response is None:
+                self.send_response(204)
+                self.end_headers()
+                return
+            self._send(200, response)
+        except Exception as exc:
+            traceback.print_exc()
+            request_id = incoming.get("id") if isinstance(incoming, dict) else None
+            self._send(500, {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32603, "message": str(exc)}})
+
     def do_PATCH(self):
         try:
+            if not self._require_auth():
+                return
             if self.path.startswith("/admin/memories/"):
                 memory_id = self.path.rsplit("/", 1)[-1]
                 payload = self._read_json()
@@ -203,6 +294,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         try:
+            if not self._require_auth():
+                return
             if self.path.startswith("/admin/memories/"):
                 memory_id = self.path.rsplit("/", 1)[-1]
                 self._send(200, delete_admin_memory(memory_id))

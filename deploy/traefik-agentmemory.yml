@@ -1,0 +1,33 @@
+# Traefik dynamic file-provider config for AgentMemory.
+#
+# Install as: /root/netbird/traefik-conf/agentmemory.yml
+#
+# Routes andrewm.ru/agentmemory/* to the agentmemory container which
+# joins the netbird_netbird network (see deploy/docker-compose.yml).
+# The stripPrefix middleware removes /agentmemory before forwarding,
+# so the app keeps serving /health, /mcp, etc. on its native paths.
+
+http:
+  routers:
+    agentmemory:
+      rule: "Host(`andrewm.ru`) && PathPrefix(`/agentmemory`)"
+      entrypoints: [websecure]
+      tls:
+        certResolver: letsencrypt
+      service: agentmemory
+      priority: 80
+      middlewares:
+        - agentmemory-strip
+
+  services:
+    agentmemory:
+      loadBalancer:
+        servers:
+          - url: "http://agentmemory:8765"
+        passHostHeader: true
+
+  middlewares:
+    agentmemory-strip:
+      stripPrefix:
+        prefixes:
+          - "/agentmemory"
