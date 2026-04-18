@@ -68,20 +68,28 @@ If your host VPS can reach OpenRouter embeddings directly, this step is optional
 
 ## 4. Start the container
 
-The deploy compose file binds port `18765` to the `172.30.0.1` docker
-bridge gateway that Traefik uses for file-provider services (mirroring the
-existing `marzban`, `subscription-builder`, etc. pattern), so the port
-stays off the public interface.
-
 ```bash
-docker compose -f deploy/docker-compose.yml --env-file .env up -d --build
+docker compose -f deploy/docker-compose.yml --env-file .env up -d --build --force-recreate
 docker logs agentmemory --tail 30
-curl -s http://172.30.0.1:18765/health
+docker exec agentmemory curl -fsS http://127.0.0.1:8765/health
 ```
 
-The `/health` call should return `{"ok": true}` without a token.
+The `--force-recreate` is intentional. Compose v2 has been observed
+silently dropping non-primary network attachments on plain `up -d`
+(see the internal post-mortem "502 after deploy"). Forcing recreation
+adds ~2s of downtime and removes a whole class of invisible drift.
 
-## 4. Plug into Traefik
+### Network re-attachment guard
+
+If a deploy is ever run without `--force-recreate` and something looks
+off, re-attach `agentmemory` to the Traefik network idempotently:
+
+```bash
+docker network connect netbird_netbird agentmemory 2>&1 \
+  | grep -v "already exists" || true
+```
+
+## 5. Plug into Traefik
 
 Copy the file-provider route into Traefik's dynamic config directory:
 
@@ -134,12 +142,58 @@ Add a connector with:
 
 ChatGPT requires HTTPS; the Let's Encrypt cert on `andrewm.ru` covers it.
 
+## Network topology
+
+```
+                     ┌───────────────────────────────────────────┐
+                     │            andrewm.ru:443 (TLS)           │
+                     └──────────────────┬────────────────────────┘
+                                        │
+                                ┌───────▼─────────┐
+                                │     traefik     │  netbird_netbird
+                                └───────┬─────────┘
+                                        │ http://agentmemory:8765
+                                        │
+┌─────────────┐                ┌────────▼────────┐       ┌──────────────────┐
+│ deploy_     │    HTTP CONNECT│   agentmemory   │       │ agentmemory-proxy│
+│ internal    │◄───────────────┤                 │       │  (xray sidecar)  │
+│             │    :1081       │  (mem0 + API)   │       │                  │
+└─────────────┘                └────────┬────────┘       └──────────────────┘
+                                        │
+                                        │ (two network memberships)
+                                        ▼
+                                 netbird_netbird
+```
+
+**Invariants that matter** (from the post-mortem that drove these guards):
+
+1. `agentmemory` MUST be on both `netbird_netbird` (so Traefik sees it) and
+   `deploy_internal` (so it can reach `agentmemory-proxy`). Losing the
+   Traefik membership yields 502; losing internal membership breaks
+   embeddings with a misleading `NoneType` error.
+2. `agentmemory-proxy` stays on `deploy_internal` only. It has zero public
+   surface; no host port is published.
+3. `docker compose up -d` without `--force-recreate` can drift the first
+   invariant. Always recreate.
+4. Traefik's file-provider route has a loadBalancer healthCheck on
+   `/health`, so misattachments surface as 503 (self-describing), not 502.
+
 ## Updating the deployment
 
 ```bash
 cd /opt/agentmemory
 git pull
-docker compose -f deploy/docker-compose.yml --env-file .env up -d --build
+docker compose -f deploy/docker-compose.yml --env-file .env up -d --build --force-recreate
+# Self-heal guard (idempotent):
+docker network connect netbird_netbird agentmemory 2>&1 | grep -v "already exists" || true
+
+# Post-deploy smoke test
+TOKEN="$(grep ^AGENTMEMORY_API_TOKEN= .env | cut -d= -f2)"
+curl -fsS https://andrewm.ru/agentmemory/health >/dev/null && echo "health ok"
+curl -fsS -X POST https://andrewm.ru/agentmemory/mcp \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | python3 -c "import sys,json;d=json.load(sys.stdin);print('tools:',len(d['result']['tools']))"
 ```
 
 ## Rotating the token

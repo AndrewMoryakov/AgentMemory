@@ -25,6 +25,15 @@ services:
     restart: unless-stopped
     depends_on:
       - agentmemory-proxy
+    # Container-level healthcheck. Passes while the HTTP server responds;
+    # does NOT verify the proxy chain works — that's intentional because
+    # embedding-provider availability shouldn't flap the container state.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=2).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     environment:
       AGENTMEMORY_API_HOST: "0.0.0.0"
       AGENTMEMORY_API_PORT: "8765"
@@ -57,6 +66,14 @@ services:
     image: teddysun/xray:latest
     container_name: agentmemory-proxy
     restart: unless-stopped
+    # Xray has no /health; TCP liveness on the HTTP-CONNECT inbound is
+    # enough to catch config-load failures and crashes.
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "1081"]
+      interval: 20s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     volumes:
       - ./xray-proxy.json:/etc/xray/config.json:ro
     networks:

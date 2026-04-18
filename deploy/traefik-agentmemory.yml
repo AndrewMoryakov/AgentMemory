@@ -37,6 +37,13 @@ http:
         servers:
           - url: "http://agentmemory:8765"
         passHostHeader: true
+        # Traefik-level healthcheck so backend drift surfaces as 503
+        # (service-unavailable, self-describing) instead of 502
+        # (bad-gateway, hides network/DNS misattachment).
+        healthCheck:
+          path: /health
+          interval: "15s"
+          timeout: "3s"
 
   middlewares:
     agentmemory-strip:
