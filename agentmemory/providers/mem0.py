@@ -49,6 +49,66 @@ def is_configured_api_key(value: str | None) -> bool:
     return bool(normalized) and normalized not in PLACEHOLDER_KEYS
 
 
+_openai_usage_hook_installed = False
+
+
+def _install_openai_usage_capture() -> None:
+    """Wrap openai.resources.* create() methods so completions and embeddings
+    funnel their usage block through agentmemory.runtime.metrics. mem0 uses
+    the openai SDK for both LLM and embeddings, so a one-time wrap at first
+    provider load covers every subsequent call in the process.
+
+    The wrap is idempotent and tolerant of SDK shape changes: if a method
+    isn't found, the capture is silently skipped for that surface rather
+    than breaking the provider.
+    """
+    global _openai_usage_hook_installed
+    if _openai_usage_hook_installed:
+        return
+    try:
+        from openai.resources.embeddings import Embeddings
+        from openai.resources.chat.completions import Completions as ChatCompletions
+    except Exception:
+        _openai_usage_hook_installed = True
+        return
+
+    from agentmemory.runtime import metrics as _metrics
+
+    def _wrap(owner, attr: str) -> None:
+        original = getattr(owner, attr, None)
+        if original is None or getattr(original, "__agentmemory_usage_hook__", False):
+            return
+
+        def wrapped(self, *args, **kwargs):
+            response = original(self, *args, **kwargs)
+            try:
+                usage = getattr(response, "usage", None)
+                if usage is not None:
+                    prompt = getattr(usage, "prompt_tokens", 0) or 0
+                    completion = getattr(usage, "completion_tokens", 0) or 0
+                    total = getattr(usage, "total_tokens", None)
+                    if total is not None and not completion and not prompt:
+                        prompt = int(total)
+                    model = getattr(response, "model", None) or kwargs.get("model")
+                    if isinstance(model, str):
+                        _metrics.record_llm_usage(
+                            model=model,
+                            prompt_tokens=int(prompt),
+                            completion_tokens=int(completion),
+                        )
+            except Exception:
+                # Never let metrics break the actual call.
+                pass
+            return response
+
+        wrapped.__agentmemory_usage_hook__ = True  # type: ignore[attr-defined]
+        setattr(owner, attr, wrapped)
+
+    _wrap(Embeddings, "create")
+    _wrap(ChatCompletions, "create")
+    _openai_usage_hook_installed = True
+
+
 class Mem0Provider(BaseMemoryProvider):
     provider_name = "mem0"
     display_name = "Mem0"
@@ -199,6 +259,7 @@ class Mem0Provider(BaseMemoryProvider):
         api_key = self._get_openrouter_api_key()
         os.environ.setdefault("OPENAI_API_KEY", api_key)
         os.environ.setdefault("OPENAI_BASE_URL", OPENROUTER_BASE_URL)
+        _install_openai_usage_capture()
 
         config = dict(self.provider_config)
         embedder = dict(config.get("embedder", {}))

@@ -21,6 +21,8 @@ from agentmemory.runtime.admin import (
     pin_admin_memory,
     update_admin_memory,
 )
+from agentmemory.runtime import lifecycle as lifecycle_module
+from agentmemory.runtime import metrics as metrics_registry
 from agentmemory.runtime.operation_adapters import http_operation_source
 from agentmemory.runtime.operations import OPERATIONS
 from agentmemory.runtime.config import (
@@ -326,6 +328,12 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._send(200, {"ok": True})
                 return
+            if parsed.path == "/metrics":
+                if not self._require_auth():
+                    return
+                body = metrics_registry.prometheus_text().encode("utf-8")
+                self._send_bytes(200, body, "text/plain; version=0.0.4; charset=utf-8")
+                return
             if parsed.path == "/.well-known/oauth-authorization-server" or parsed.path.startswith("/.well-known/oauth-authorization-server/"):
                 self._handle_oauth_metadata()
                 return
@@ -339,6 +347,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/admin/stats":
                 self._send(200, admin_stats(limit=int(params.get("limit", [500])[0])))
+                return
+            if parsed.path == "/admin/stats/operations":
+                self._send(200, metrics_registry.summary())
                 return
             if parsed.path == "/admin/scopes":
                 self._send(200, OPERATIONS["list_scopes"].execute(http_operation_source("list_scopes", query_params=params)))
@@ -526,6 +537,27 @@ def _install_signal_handlers() -> None:
             pass
 
 
+def _start_ttl_sweeper() -> None:
+    # Lazy import so a misconfigured provider doesn't abort startup — the
+    # sweeper is opt-in and should degrade gracefully.
+    try:
+        from agentmemory.runtime.config import (
+            memory_delete as _memory_delete,
+            memory_list as _memory_list,
+            memory_list_scopes as _memory_list_scopes,
+        )
+    except Exception:
+        return
+    try:
+        lifecycle_module.start_sweeper_thread(
+            list_scopes=_memory_list_scopes,
+            list_memories=_memory_list,
+            delete_memory=_memory_delete,
+        )
+    except Exception:
+        pass
+
+
 def main():
     os.environ["AGENTMEMORY_OWNER_PROCESS"] = "1"
     api_host = current_api_host()
@@ -534,6 +566,7 @@ def main():
     _record_supervisor_files(host=api_host, port=api_port)
     atexit.register(_cleanup_supervisor_files)
     _install_signal_handlers()
+    _start_ttl_sweeper()
     print(f"AgentMemory API listening on http://{api_host}:{api_port}")
     try:
         server.serve_forever()

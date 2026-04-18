@@ -26,18 +26,33 @@ from agentmemory.runtime.config import (
     memory_search,
     memory_update,
 )
+from agentmemory.runtime import lifecycle as lifecycle_module
+from agentmemory.runtime import metrics as metrics_registry
 from agentmemory.runtime.transport import execute_transport_operation, validate_and_build_list_kwargs, validate_and_build_search_kwargs
 from agentmemory.providers.base import MemoryNotFoundError
 
 
-@dataclass(frozen=True)
+@dataclass
 class OperationSpec:
     name: str
     mcp_name: str
     title: str
     description: str
     input_schema: dict[str, Any]
+    # Public callable. __post_init__ rewrites it to a metrics-timed wrapper
+    # so every call through OPERATIONS[...].execute(source) — HTTP, MCP, or
+    # CLI — records latency + success/error per operation name.
     execute: Callable[[dict[str, Any]], Any]
+
+    def __post_init__(self) -> None:
+        raw = self.execute
+        name = self.name
+
+        def _instrumented(source: dict[str, Any]) -> Any:
+            with metrics_registry.timed(name):
+                return raw(source)
+
+        self.execute = _instrumented
 
 
 def _execute_health(_: dict[str, Any]) -> Any:
@@ -62,14 +77,79 @@ def _original_input_text(source: dict[str, Any]) -> str | None:
     return text if isinstance(text, str) else None
 
 
+DEDUP_SCORE_THRESHOLD = 0.92
+
+
+def _maybe_dedup_existing(source: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a pre-existing record that matches the add candidate closely
+    enough to skip the insert. Guarded by dedup=true in source.
+
+    Returns None if dedup is disabled, not supported, the scope is missing,
+    or no candidate clears the similarity threshold.
+    """
+    if not bool(source.get("dedup", False)):
+        return None
+    query_text = _original_input_text(source)
+    if not isinstance(query_text, str) or not query_text.strip():
+        return None
+    scope_fields = {
+        "user_id": source.get("user_id"),
+        "agent_id": source.get("agent_id"),
+        "run_id": source.get("run_id"),
+    }
+    if not any(v for v in scope_fields.values()):
+        # Dedup without a scope would compare against the entire store; that's
+        # too expensive and ambiguous for a default value. Caller must scope.
+        return None
+    capabilities = active_provider_capabilities()
+    if not capabilities.get("supports_semantic_search"):
+        return None
+    try:
+        kwargs = validate_and_build_search_kwargs(
+            provider_name=active_provider_name(),
+            capabilities=capabilities,
+            source={"query": query_text, **scope_fields, "limit": 3},
+            default_limit=3,
+        )
+    except Exception:
+        return None
+    try:
+        hits = execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_search(**kwargs),
+            proxy_call=lambda: proxy_search(**kwargs),
+        )
+    except Exception:
+        return None
+    if not isinstance(hits, list):
+        return None
+    hits = lifecycle_module.filter_unexpired(hits)
+    for hit in hits:
+        score = hit.get("score") if isinstance(hit, dict) else None
+        if isinstance(score, (int, float)) and float(score) >= DEDUP_SCORE_THRESHOLD:
+            enriched = dict(hit)
+            enriched["dedup_hit"] = True
+            enriched["dedup_score"] = float(score)
+            return enriched
+    return None
+
+
 def _execute_add(source: dict[str, Any]) -> Any:
+    deduped = _maybe_dedup_existing(source)
+    if deduped is not None:
+        return deduped
+
     infer_requested = bool(source.get("infer", False))
+    # Lifecycle: caller may set metadata.expires_at (ISO) or metadata.ttl_seconds.
+    # Normalize to a single expires_at field so downstream readers have one key
+    # to check. ttl_seconds is dropped after resolution.
+    normalized_metadata = lifecycle_module.apply_expiry_to_metadata(source.get("metadata"))
     kwargs = {
         "messages": source["messages"],
         "user_id": source.get("user_id"),
         "agent_id": source.get("agent_id"),
         "run_id": source.get("run_id"),
-        "metadata": source.get("metadata"),
+        "metadata": normalized_metadata,
         "infer": infer_requested,
         "memory_type": source.get("memory_type"),
     }
@@ -110,11 +190,14 @@ def _execute_search(source: dict[str, Any]) -> Any:
         source=source,
         default_limit=10,
     )
-    return execute_transport_operation(
+    result = execute_transport_operation(
         use_proxy=should_proxy_to_api(),
         local_call=lambda: memory_search(**kwargs),
         proxy_call=lambda: proxy_search(**kwargs),
     )
+    if isinstance(result, list):
+        return lifecycle_module.filter_unexpired(result)
+    return result
 
 
 def _execute_list(source: dict[str, Any]) -> Any:
@@ -124,20 +207,28 @@ def _execute_list(source: dict[str, Any]) -> Any:
         source=source,
         default_limit=100,
     )
-    return execute_transport_operation(
+    result = execute_transport_operation(
         use_proxy=should_proxy_to_api(),
         local_call=lambda: memory_list(**kwargs),
         proxy_call=lambda: proxy_list(**kwargs),
     )
+    if isinstance(result, list):
+        return lifecycle_module.filter_unexpired(result)
+    return result
 
 
 def _execute_get(source: dict[str, Any]) -> Any:
     memory_id = source["memory_id"]
-    return execute_transport_operation(
+    result = execute_transport_operation(
         use_proxy=should_proxy_to_api(),
         local_call=lambda: memory_get(memory_id),
         proxy_call=lambda: proxy_get(memory_id),
     )
+    if isinstance(result, dict) and lifecycle_module.is_expired(result):
+        # Treat expired records as if the sweeper already removed them: the
+        # caller will get MemoryNotFoundError, matching hard_delete semantics.
+        raise MemoryNotFoundError(memory_id)
+    return result
 
 
 def _execute_update(source: dict[str, Any]) -> Any:
@@ -191,7 +282,10 @@ OPERATIONS: dict[str, OperationSpec] = {
             "verbatim (infer=false). Pass infer=true to let the provider's LLM extract, "
             "rewrite, or deduplicate the text before storage; when that happens the response "
             "includes transformed=true with original_text and stored_text so the rewrite "
-            "is observable. infer=true costs one LLM call per write."
+            "is observable. infer=true costs one LLM call per write. Optional lifecycle: "
+            "set metadata.ttl_seconds (positive number) or metadata.expires_at (ISO 8601 UTC) "
+            "to have this memory auto-expire — expired records are filtered from list/search "
+            "and hard-deleted by the background sweeper."
         ),
         input_schema={
             "type": "object",
@@ -208,6 +302,17 @@ OPERATIONS: dict[str, OperationSpec] = {
                         "When false (default) the provider stores the input text verbatim. "
                         "When true, the provider may run an LLM over the input to extract or "
                         "rewrite memory-worthy content; stored text may differ from input."
+                    ),
+                },
+                "dedup": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "When true, before inserting run a semantic search within the same "
+                        "scope and if any existing memory matches the input above the "
+                        "similarity threshold, return that record (with dedup_hit=true and "
+                        "dedup_score) instead of creating a duplicate. Requires user_id, "
+                        "agent_id, or run_id and a provider with semantic search."
                     ),
                 },
                 "memory_type": {"type": "string"},

@@ -142,6 +142,48 @@ Add a connector with:
 
 ChatGPT requires HTTPS; the Let's Encrypt cert on `andrewm.ru` covers it.
 
+## Observability
+
+Two endpoints expose runtime metrics (bearer-gated like everything else):
+
+```
+GET /agentmemory/metrics                 # Prometheus text format
+GET /agentmemory/admin/stats/operations  # JSON summary
+```
+
+The Prometheus endpoint emits:
+
+- `agentmemory_operation_ok_total{operation}` — per-tool success counter
+- `agentmemory_operation_error_total{operation, error_type}` — per-tool error counter by class
+- `agentmemory_operation_latency_seconds{operation}` — histogram with p50/p95/p99 derivable
+- `agentmemory_llm_tokens_total{model, kind}` — prompt/completion tokens per model
+- `agentmemory_llm_cost_usd{model}` — estimated spend per model, pricing in `agentmemory/runtime/metrics.py`
+
+Costs are approximate — pricing in the lookup table reflects OpenRouter's
+rates at the time the model was added. Unknown models still count tokens
+but contribute `0` to cost totals.
+
+Hook a scraper later if needed; there is no Prometheus server on the host.
+
+## Memory lifecycle
+
+**TTL.** `memory_add` accepts either `metadata.ttl_seconds` (positive number)
+or `metadata.expires_at` (ISO-8601 UTC). The runtime normalizes both to a
+stored `expires_at`. Expired records are filtered from `memory_list`/
+`memory_search` on read, and `memory_get` on an expired id raises
+`MemoryNotFoundError` — matching the hard-delete contract.
+
+A background sweeper in the API process hard-deletes expired records every
+10 minutes by default. Override with `AGENTMEMORY_TTL_SWEEP_MINUTES` (env,
+float minutes; `0` disables the sweeper so reads alone enforce TTL).
+
+**Dedup.** Pass `dedup: true` to `memory_add` (requires scope +
+semantic-search provider) to run a similarity search before the insert. If
+any existing record in the same scope scores ≥0.92, the tool returns that
+record with `dedup_hit: true` and `dedup_score` instead of creating a
+duplicate. `infer=true` rewrites still get de-duplicated against the
+rewritten text.
+
 ## Network topology
 
 ```
