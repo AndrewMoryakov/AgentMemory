@@ -69,25 +69,29 @@ If your host VPS can reach OpenRouter embeddings directly, this step is optional
 ## 4. Start the container
 
 ```bash
-docker compose -f deploy/docker-compose.yml --env-file .env up -d --build --force-recreate
-docker logs agentmemory --tail 30
-docker exec agentmemory curl -fsS http://127.0.0.1:8765/health
+# The recommended path — one command, runs both guards and verifies:
+deploy/redeploy.sh
 ```
 
-The `--force-recreate` is intentional. Compose v2 has been observed
-silently dropping non-primary network attachments on plain `up -d`
-(see the internal post-mortem "502 after deploy"). Forcing recreation
-adds ~2s of downtime and removes a whole class of invisible drift.
+`deploy/redeploy.sh` wraps `docker compose up -d --build --force-recreate`,
+forcibly re-attaches the container to `netbird_netbird` (idempotent), and
+waits for `https://andrewm.ru/agentmemory/health` to return `200`. Exits
+non-zero if the backend hasn't come back within ~60 seconds, so CI / cron
+can catch partial deploys.
 
-### Network re-attachment guard
-
-If a deploy is ever run without `--force-recreate` and something looks
-off, re-attach `agentmemory` to the Traefik network idempotently:
+Manual equivalent if the script isn't convenient:
 
 ```bash
+docker compose -f deploy/docker-compose.yml --env-file .env up -d --build --force-recreate
 docker network connect netbird_netbird agentmemory 2>&1 \
   | grep -v "already exists" || true
+docker logs agentmemory --tail 30
 ```
+
+Compose v2 has been observed silently dropping non-primary network
+attachments on plain `up -d` (see `/opt/telegramchatanalyzer/POSTMORTEM_NETWORK_DETACH.md`).
+`--force-recreate` doesn't always prevent it either; the manual
+`docker network connect` is the guarantee.
 
 ## 5. Plug into Traefik
 
@@ -219,6 +223,75 @@ rewritten text.
    invariant. Always recreate.
 4. Traefik's file-provider route has a loadBalancer healthCheck on
    `/health`, so misattachments surface as 503 (self-describing), not 502.
+
+## Health-endpoint exposure policy
+
+`memory_health` (MCP tool) and `GET /health` (HTTP, authenticated) return a
+verbose payload: container paths, listener PID, provider name, model names,
+embedding dimensions, and the whole `provider_contract` block. Today this
+is acceptable because:
+
+- Every caller authenticates with the same bearer token or OAuth client.
+- There is one real user (the owner).
+- No untrusted tenant shares the runtime.
+
+If access is ever opened up — an AI-tool marketplace, a shared team, an
+LLM application using the MCP on behalf of unknown end-users — **split
+the health surface before flipping the switch**. Two reasonable shapes:
+
+1. Public `memory_health` returns `{ok, contract_version, scope_kinds}`
+   only; all path/PID/model fields move to a new `memory_health_debug`
+   tool gated by an additional scope or header.
+2. Keep one tool but strip verbose fields from the response whenever the
+   bearer token is missing or belongs to a non-ops scope.
+
+`GET /health` (unauthenticated liveness) already returns `{"ok": true}`
+only; no change needed there.
+
+**Decision:** no split today. This section is a reminder for the future
+change — if you see this doc before opening access, do the split first.
+
+## Backup and restore
+
+Memory lives in the `deploy_agentmemory_data` Docker volume (Qdrant +
+SQLite + localjson JSON file). Config + secrets live in `.env`,
+`deploy/agentmemory.config.json`, and `deploy/xray-proxy.json`. A helper
+script bundles all of them into one dated tarball:
+
+```bash
+# on the server
+/opt/agentmemory/deploy/backup-agentmemory.sh
+# default output: /var/backups/agentmemory/agentmemory-<UTC-timestamp>.tar.gz
+```
+
+Environment overrides: `BACKUP_DIR`, `VOLUME_NAME`, `PROJECT_DIR`,
+`BACKUP_RETAIN` (keep N most recent, default 14).
+
+**Restore outline:**
+
+```bash
+cd /opt/agentmemory
+docker compose -f deploy/docker-compose.yml --env-file .env down
+# Expand the bundle into /var/backups/agentmemory/ and pull out the inner
+# archives. The data archive restores into the volume; the config archive
+# restores into the project dir.
+tar -xzf agentmemory-<ts>.tar.gz -C /tmp/restore/
+docker run --rm -v deploy_agentmemory_data:/data \
+  -v /tmp/restore:/backup alpine sh -c \
+  'cd / && tar -xzf /backup/agentmemory-data-<ts>.tar.gz'
+tar -xzf /tmp/restore/agentmemory-config-<ts>.tar.gz -C /opt/agentmemory
+docker compose -f deploy/docker-compose.yml --env-file .env up -d --force-recreate
+```
+
+The tarball contains secrets (API token, OpenRouter key, OAuth client
+secret, xray tunnel credentials). Store it on a private filesystem; if
+it will leave the host, encrypt at rest (age, gpg, rclone crypt).
+
+A simple schedule (daily at 04:00 UTC, keep 14 days):
+
+```cron
+0 4 * * * /opt/agentmemory/deploy/backup-agentmemory.sh >> /var/log/agentmemory-backup.log 2>&1
+```
 
 ## Updating the deployment
 

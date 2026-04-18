@@ -184,7 +184,7 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
             agentmemory_operations.OPERATIONS["search"] = original_search_spec
 
         self.assertEqual(rc, 2)
-        self.assertIn("requires --user-id, --agent-id, or --run-id for search", stderr_buffer.getvalue())
+        self.assertIn("requires user_id, agent_id, or run_id for search", stderr_buffer.getvalue())
 
     def test_cli_search_coerces_unsupported_rerank_before_provider_call(self) -> None:
         # Per DEFECT-01 the capability gap no longer raises; the dispatcher

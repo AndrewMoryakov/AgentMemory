@@ -39,14 +39,20 @@ def validate_search_request(
     filters=None,
     rerank: bool | None = None,
 ) -> None:
+    # Transport-neutral wording — the same validator runs from the MCP tool
+    # dispatcher, the HTTP endpoint, and the CLI, so error messages must not
+    # read like CLI help ("--user-id", "--no-rerank"). CLI-facing hints live
+    # in argparse definitions.
     if capabilities["requires_scope_for_search"] and not has_scope(user_id=user_id, agent_id=agent_id, run_id=run_id):
         raise ProviderValidationError(
-            f"Provider '{provider_name}' requires --user-id, --agent-id, or --run-id for search."
+            f"Provider '{provider_name}' requires user_id, agent_id, or run_id for search."
         )
     if filters is not None and not capabilities["supports_filters"]:
-        raise ProviderValidationError(f"Provider '{provider_name}' does not support --filters for search.")
+        raise ProviderValidationError(f"Provider '{provider_name}' does not support filters for search.")
     if rerank and not capabilities["supports_rerank"]:
-        raise ProviderValidationError(f"Provider '{provider_name}' does not support rerank. Use --no-rerank.")
+        raise ProviderValidationError(
+            f"Provider '{provider_name}' does not support rerank. Call memory_search with rerank=false."
+        )
 
 
 def validate_list_request(
@@ -60,10 +66,10 @@ def validate_list_request(
 ) -> None:
     if capabilities["requires_scope_for_list"] and not has_scope(user_id=user_id, agent_id=agent_id, run_id=run_id):
         raise ProviderValidationError(
-            f"Provider '{provider_name}' requires --user-id, --agent-id, or --run-id for list."
+            f"Provider '{provider_name}' requires user_id, agent_id, or run_id for list."
         )
     if filters is not None and not capabilities["supports_filters"]:
-        raise ProviderValidationError(f"Provider '{provider_name}' does not support --filters for list.")
+        raise ProviderValidationError(f"Provider '{provider_name}' does not support filters for list.")
 
 
 def build_search_kwargs(source: dict[str, Any], *, default_limit: int = 10) -> dict[str, Any]:

@@ -154,12 +154,17 @@ class BaseMemoryProvider(ABC):
 
     def provider_contract(self) -> ProviderContract:
         runtime_policy = self.runtime_policy()
+        # Default advertises what callers *observe* (immediate visibility after
+        # the provider call returns). Providers with genuinely deferred
+        # visibility must override and return "eventual" or
+        # "owner_process_proxy" explicitly — the base must not emit a
+        # non-committal sentinel just because the transport happens to proxy.
         return {
             "contract_version": "v2",
             "record_shape": "memory_record_v1",
             "scope_kinds": ["user", "agent", "run"],
             "consistency": "immediate",
-            "write_visibility": "owner_process_proxy" if runtime_policy["transport_mode"] == "owner_process_proxy" else "immediate",
+            "write_visibility": "immediate",
             "update_semantics": "replace",
             "delete_semantics": "hard_delete",
             "filter_semantics": "record_and_metadata",
