@@ -4,15 +4,43 @@
   "profiles": {
     "default": {
       "runtime": {
-        "provider": "localjson",
+        "provider": "mem0",
         "runtime_dir": "/app/data",
         "api_host": "0.0.0.0",
         "api_port": 8765
       },
       "providers": {
-        "localjson": {
-          "storage_path": "/app/data/localjson-memories.json",
-          "default_limit": 100
+        "mem0": {
+          "vector_store": {
+            "provider": "qdrant",
+            "config": {
+              "collection_name": "agentmemory_openrouter",
+              "path": "/app/data/qdrant",
+              "on_disk": true,
+              "embedding_model_dims": 3072
+            }
+          },
+          "llm": {
+            "provider": "openai",
+            "config": {
+              "model": "google/gemma-4-31b-it",
+              "temperature": 0.1,
+              "max_tokens": 1500,
+              "top_p": 0.1,
+              "openrouter_base_url": "https://openrouter.ai/api/v1",
+              "site_url": "https://andrewm.ru/agentmemory",
+              "app_name": "AgentMemory"
+            }
+          },
+          "embedder": {
+            "provider": "openai",
+            "config": {
+              "model": "google/gemini-embedding-2-preview",
+              "openai_base_url": "https://openrouter.ai/api/v1",
+              "embedding_dims": 3072
+            }
+          },
+          "history_db_path": "/app/data/history.db"
         }
       }
     }

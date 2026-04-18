@@ -44,7 +44,29 @@ echo "API token: $TOKEN"
 
 Save the printed token — MCP/HTTP clients need it.
 
-## 3. Start the container
+## 3. Seed the xray tunnel (only if the host VPS is region-blocked)
+
+Some cloud providers block the IPs used by OpenRouter's embedding backends.
+Symptom: `/health` is green but `memory_add` returns
+`ProviderUnavailableError: 'NoneType' object is not subscriptable`, because the
+OpenAI SDK receives `{"error": {"message": "No successful provider responses."}}`.
+
+The fix used here is a VLESS+Reality tunnel on a cooperating secondary host,
+fronted by an `xray` sidecar that exposes SOCKS5 (1080) + HTTP CONNECT (1081)
+on the `agentmemory-proxy` internal network. The agentmemory container
+uses `HTTP_PROXY`/`HTTPS_PROXY` pointing at it.
+
+Copy the template and fill in the tunnel credentials (the file is gitignored):
+
+```bash
+cp deploy/xray-proxy.example.json deploy/xray-proxy.json
+# Edit with the VLESS user uuid, reality publicKey/shortId, and remote host
+```
+
+If your host VPS can reach OpenRouter embeddings directly, this step is optional
+— you can still use `localjson` without a tunnel, or skip mounting the proxy.
+
+## 4. Start the container
 
 The deploy compose file binds port `18765` to the `172.30.0.1` docker
 bridge gateway that Traefik uses for file-provider services (mirroring the

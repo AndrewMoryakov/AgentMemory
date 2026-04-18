@@ -1,0 +1,44 @@
+{
+  "_comment": "Template for deploy/xray-proxy.json. Holds VLESS+Reality tunnel credentials used to route outbound HTTP from the agentmemory container when the host VPS is region-blocked by OpenRouter embedding providers. Copy to deploy/xray-proxy.json and fill in real values from your tunnel-server admin; the actual file is gitignored.",
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 1080,
+      "protocol": "socks",
+      "settings": { "auth": "noauth" }
+    },
+    {
+      "listen": "0.0.0.0",
+      "port": 1081,
+      "protocol": "http"
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [{
+          "address": "REMOTE_TUNNEL_HOST",
+          "port": 9443,
+          "users": [{
+            "id": "REPLACE_WITH_VLESS_USER_UUID",
+            "encryption": "none",
+            "flow": "xtls-rprx-vision"
+          }]
+        }]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "fingerprint": "chrome",
+          "serverName": "www.google.com",
+          "publicKey": "REPLACE_WITH_REALITY_PUBLIC_KEY",
+          "shortId": "REPLACE_WITH_REALITY_SHORT_ID",
+          "spiderX": "/"
+        }
+      }
+    }
+  ]
+}

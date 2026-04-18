@@ -23,6 +23,8 @@ services:
     image: agentmemory:latest
     container_name: agentmemory
     restart: unless-stopped
+    depends_on:
+      - agentmemory-proxy
     environment:
       AGENTMEMORY_API_HOST: "0.0.0.0"
       AGENTMEMORY_API_PORT: "8765"
@@ -32,8 +34,15 @@ services:
       AGENTMEMORY_OAUTH_CLIENT_SECRET: "${AGENTMEMORY_OAUTH_CLIENT_SECRET:-}"
       AGENTMEMORY_PUBLIC_URL: "${AGENTMEMORY_PUBLIC_URL:-}"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      # Outbound HTTP via xray sidecar. This host VPS is region-blocked
+      # by several OpenRouter embedding providers; tunnelling through
+      # the secondary host (see xray-proxy.json) restores access.
+      HTTP_PROXY: "http://agentmemory-proxy:1081"
+      HTTPS_PROXY: "http://agentmemory-proxy:1081"
+      NO_PROXY: "localhost,127.0.0.1,agentmemory,agentmemory-proxy"
     networks:
       - traefik
+      - internal
     volumes:
       - agentmemory_data:/app/data
       # Seed runtime config into the image's BASE_DIR so the provider
@@ -41,10 +50,23 @@ services:
       # Edit deploy/agentmemory.config.json to switch provider.
       - ./agentmemory.config.json:/app/agentmemory.config.json:ro
 
+  # VLESS+Reality tunnel to the secondary host (216.57.105.129) that
+  # isn't subject to the embedding-provider IP blocks on this VPS.
+  # Exposes SOCKS5 (1080) and HTTP CONNECT (1081) on the internal net.
+  agentmemory-proxy:
+    image: teddysun/xray:latest
+    container_name: agentmemory-proxy
+    restart: unless-stopped
+    volumes:
+      - ./xray-proxy.json:/etc/xray/config.json:ro
+    networks:
+      - internal
+
 networks:
   traefik:
     external: true
     name: netbird_netbird
+  internal:
 
 volumes:
   agentmemory_data:
