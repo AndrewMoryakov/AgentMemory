@@ -532,6 +532,10 @@ class Handler(BaseHTTPRequestHandler):
                 result = OPERATIONS["list"].execute(http_operation_source("list", query_params=params))
                 self._send(200, result)
                 return
+            if parsed.path == "/memories/page":
+                result = OPERATIONS["list_page"].execute(http_operation_source("list_page", query_params=params))
+                self._send(200, result)
+                return
             if parsed.path.startswith("/memories/"):
                 memory_id = parsed.path.rsplit("/", 1)[-1]
                 self._send(200, OPERATIONS["get"].execute(http_operation_source("get", path_params={"memory_id": memory_id})))
@@ -572,6 +576,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/search":
                 payload = self._read_json()
                 result = OPERATIONS["search"].execute(http_operation_source("search", payload=payload))
+                self._send(200, result)
+                return
+            if self.path == "/search/page":
+                payload = self._read_json()
+                result = OPERATIONS["search_page"].execute(http_operation_source("search_page", payload=payload))
                 self._send(200, result)
                 return
             if self.path == "/update":

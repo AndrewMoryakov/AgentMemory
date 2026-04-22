@@ -53,7 +53,9 @@ Current core operations:
 
 - `add`
 - `search`
+- `search_page`
 - `list`
+- `list_page`
 - `get`
 - `update`
 - `delete`
@@ -275,7 +277,9 @@ The provider should answer these questions explicitly.
 
 - How does `add_memory` work
 - How does `search_memory` work
+- How does `search_memory_page` work
 - How does `list_memories` work
+- How does `list_memories_page` work
 - Does `get_memory` exist natively
 - Does `update_memory` exist natively
 - Does `delete_memory` exist natively
@@ -302,6 +306,7 @@ A provider should declare things like:
 - `requires_scope_for_search`
 - `supports_owner_process_mode`
 - `supports_scope_inventory`
+- `supports_pagination`
 
 Future runtime policy should also be explicit.
 
@@ -331,6 +336,7 @@ Shared runtime responsibilities:
 - capability-aware request validation
 - consistent error formatting
 - future shared metadata systems such as scope registry
+- provider-neutral cursor walking for large list/search/export flows
 
 ## What Should Not Live In Shared Layers
 
@@ -606,6 +612,20 @@ Purpose:
 - provider-independent scope discovery
 - no provider-internal scraping
 
+## Shared pagination contract
+
+Purpose:
+
+- stable `list_page` / `search_page` payloads across providers
+- provider-owned opaque cursors instead of shared-layer backend scraping
+- large provider-neutral export without silent truncation when a provider implements `list_memories_page`
+
+Future providers such as MemPalace, Hindsight, Memvid-style stores, or
+Memweave-style systems should only declare `supports_pagination = True` after
+they can resume a record walk without duplicating or skipping records under the
+provider's expected consistency model. Providers may still ship without cursor
+support by inheriting the base single-page fallback.
+
 ## Explicit transport policy
 
 Purpose:
@@ -662,4 +682,3 @@ Then decide:
 - scope strategy
 - transport policy
 - maturity classification
-

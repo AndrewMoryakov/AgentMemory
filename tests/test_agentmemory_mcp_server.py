@@ -33,6 +33,8 @@ class AgentMemoryMcpServerTests(unittest.TestCase):
         self.assertIn("memory_list_scopes", tool_names)
         self.assertIn("memory_export", tool_names)
         self.assertIn("memory_import", tool_names)
+        self.assertIn("memory_search_page", tool_names)
+        self.assertIn("memory_list_page", tool_names)
         self.assertIn("memory_reconcile", tool_names)
 
     def test_unknown_tool_returns_jsonrpc_error(self) -> None:
@@ -213,6 +215,7 @@ class AgentMemoryMcpServerTests(unittest.TestCase):
                 "requires_scope_for_search": True,
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             }
             agentmemory_mcp_server.OPERATIONS_BY_MCP_NAME["memory_search"] = original_spec
             response = agentmemory_mcp_server.handle_request(

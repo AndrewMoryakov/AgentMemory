@@ -8,7 +8,21 @@ class AgentMemoryOperationsTests(unittest.TestCase):
     def test_registry_contains_expected_core_operations(self) -> None:
         self.assertEqual(
             set(agentmemory_operations.OPERATIONS.keys()),
-            {"health", "add", "list_scopes", "export", "import", "search", "list", "reconcile", "get", "update", "delete"},
+            {
+                "health",
+                "add",
+                "list_scopes",
+                "export",
+                "import",
+                "search",
+                "search_page",
+                "list",
+                "list_page",
+                "reconcile",
+                "get",
+                "update",
+                "delete",
+            },
         )
 
     def test_mcp_tools_are_derived_from_operation_registry(self) -> None:
@@ -33,6 +47,7 @@ class AgentMemoryOperationsTests(unittest.TestCase):
                 "requires_scope_for_search": True,
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             }
             with self.assertRaises(ProviderValidationError):
                 agentmemory_operations.OPERATIONS["search"].execute({"query": "demo"})
@@ -62,6 +77,19 @@ class AgentMemoryOperationsTests(unittest.TestCase):
         self.assertIn("run_id", schema["properties"])
         self.assertIn("filters", schema["properties"])
 
+    def test_list_page_operation_schema_accepts_cursor(self) -> None:
+        schema = agentmemory_operations.OPERATIONS["list_page"].input_schema
+
+        self.assertIn("cursor", schema["properties"])
+        self.assertIn("limit", schema["properties"])
+
+    def test_search_page_operation_schema_accepts_cursor(self) -> None:
+        schema = agentmemory_operations.OPERATIONS["search_page"].input_schema
+
+        self.assertIn("cursor", schema["properties"])
+        self.assertIn("query", schema["properties"])
+        self.assertEqual(schema["required"], ["query"])
+
     def test_reconcile_operation_uses_shared_list_validation_path(self) -> None:
         original_name = agentmemory_operations.active_provider_name
         original_caps = agentmemory_operations.active_provider_capabilities
@@ -80,6 +108,7 @@ class AgentMemoryOperationsTests(unittest.TestCase):
                 "requires_scope_for_search": True,
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             }
             with self.assertRaises(ProviderValidationError):
                 agentmemory_operations.OPERATIONS["reconcile"].execute({})

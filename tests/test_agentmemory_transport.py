@@ -68,6 +68,7 @@ class AgentMemoryTransportTests(unittest.TestCase):
                     "requires_scope_for_search": True,
                     "supports_owner_process_mode": True,
                     "supports_scope_inventory": True,
+                "supports_pagination": False,
                 },
                 source={"query": "demo"},
             )
@@ -89,6 +90,7 @@ class AgentMemoryTransportTests(unittest.TestCase):
                     "requires_scope_for_search": False,
                     "supports_owner_process_mode": False,
                     "supports_scope_inventory": True,
+                "supports_pagination": False,
                 },
                 source={"filters": {"topic": "docs"}},
             )
@@ -110,6 +112,7 @@ class AgentMemoryTransportTests(unittest.TestCase):
                     "requires_scope_for_search": True,
                     "supports_owner_process_mode": True,
                     "supports_scope_inventory": True,
+                "supports_pagination": False,
                 },
                 rerank=True,
             )
@@ -158,6 +161,7 @@ class AgentMemoryTransportTests(unittest.TestCase):
                     "requires_scope_for_search": False,
                     "supports_owner_process_mode": False,
                     "supports_scope_inventory": True,
+                "supports_pagination": False,
                 },
                 user_id="u1",
                 rerank=True,
@@ -180,6 +184,7 @@ class AgentMemoryTransportTests(unittest.TestCase):
                     "requires_scope_for_search": False,
                     "supports_owner_process_mode": False,
                     "supports_scope_inventory": True,
+                "supports_pagination": False,
                 },
                 filters={"topic": "docs"},
             )
@@ -213,6 +218,7 @@ class AgentMemoryTransportTests(unittest.TestCase):
                 "requires_scope_for_search": False,
                 "supports_owner_process_mode": False,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             }
         )
 
@@ -220,6 +226,7 @@ class AgentMemoryTransportTests(unittest.TestCase):
         self.assertEqual(summary["supports_filters"], "yes")
         self.assertEqual(summary["supports_rerank"], "no")
         self.assertEqual(summary["supports_scope_inventory"], "yes")
+        self.assertEqual(summary["supports_pagination"], "no")
 
     def test_mcp_result_uses_shared_shape_for_success_and_errors(self) -> None:
         success = mcp_result({"value": 1})

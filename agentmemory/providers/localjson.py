@@ -19,6 +19,7 @@ from agentmemory.providers.base import (
     BaseMemoryProvider,
     DeleteResult,
     MemoryNotFoundError,
+    MemoryPage,
     ProviderContract,
     MemoryRecord,
     ProviderCapabilityError,
@@ -80,6 +81,7 @@ class LocalJsonProvider(BaseMemoryProvider):
             "requires_scope_for_search": False,
             "supports_owner_process_mode": False,
             "supports_scope_inventory": True,
+            "supports_pagination": True,
         }
 
     def runtime_policy(self) -> ProviderRuntimePolicy:
@@ -302,8 +304,40 @@ class LocalJsonProvider(BaseMemoryProvider):
         return public
 
     def search_memory(self, *, query, user_id=None, agent_id=None, run_id=None, limit=10, filters=None, threshold=None, rerank=True) -> list[MemoryRecord]:
+        return self.search_memory_page(
+            query=query,
+            user_id=user_id,
+            agent_id=agent_id,
+            run_id=run_id,
+            limit=limit,
+            cursor=None,
+            filters=filters,
+            threshold=threshold,
+            rerank=rerank,
+        )["items"]
+
+    def search_memory_page(
+        self,
+        *,
+        query,
+        user_id=None,
+        agent_id=None,
+        run_id=None,
+        limit=10,
+        cursor=None,
+        filters=None,
+        threshold=None,
+        rerank=True,
+    ) -> MemoryPage:
         if rerank:
             raise ProviderCapabilityError("Local JSON provider does not support rerank.")
+        try:
+            offset = int(cursor) if cursor is not None else 0
+        except (TypeError, ValueError) as exc:
+            raise ProviderValidationError("Invalid Local JSON pagination cursor.") from exc
+        if offset < 0:
+            raise ProviderValidationError("Invalid Local JSON pagination cursor.")
+        page_limit = max(int(limit), 1)
         results: list[dict[str, Any]] = []
         with self._lock:
             with self._file_lock():
@@ -322,9 +356,33 @@ class LocalJsonProvider(BaseMemoryProvider):
                 item["score"] = score
                 results.append(item)
         results.sort(key=lambda item: item.get("score", 0.0), reverse=True)
-        return results[:limit]
+        page = results[offset : offset + page_limit]
+        next_offset = offset + len(page)
+        return {
+            "provider": self.provider_name,
+            "items": page,
+            "next_cursor": str(next_offset) if next_offset < len(results) else None,
+            "pagination_supported": True,
+        }
 
     def list_memories(self, *, user_id=None, agent_id=None, run_id=None, limit=100, filters=None) -> list[MemoryRecord]:
+        return self.list_memories_page(
+            user_id=user_id,
+            agent_id=agent_id,
+            run_id=run_id,
+            limit=limit,
+            cursor=None,
+            filters=filters,
+        )["items"]
+
+    def list_memories_page(self, *, user_id=None, agent_id=None, run_id=None, limit=100, cursor=None, filters=None) -> MemoryPage:
+        try:
+            offset = int(cursor) if cursor is not None else 0
+        except (TypeError, ValueError) as exc:
+            raise ProviderValidationError("Invalid Local JSON pagination cursor.") from exc
+        if offset < 0:
+            raise ProviderValidationError("Invalid Local JSON pagination cursor.")
+        page_limit = max(int(limit), 1)
         with self._lock:
             with self._file_lock():
                 raw_records = self._load_all_unlocked()
@@ -334,7 +392,14 @@ class LocalJsonProvider(BaseMemoryProvider):
                 if self._matches_scope(record, user_id=user_id, agent_id=agent_id, run_id=run_id) and self._matches_filters(record, filters)
             ]
         records.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
-        return records[:limit]
+        page = records[offset : offset + page_limit]
+        next_offset = offset + len(page)
+        return {
+            "provider": self.provider_name,
+            "items": page,
+            "next_cursor": str(next_offset) if next_offset < len(records) else None,
+            "pagination_supported": True,
+        }
 
     def get_memory(self, memory_id):
         with self._lock:

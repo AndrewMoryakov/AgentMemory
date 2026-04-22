@@ -118,6 +118,53 @@ class AgentMemoryHttpClientTests(unittest.TestCase):
         self.assertIn("/memories?", str(captured["path"]))
         self.assertIn("filters=", str(captured["path"]))
 
+    def test_proxy_list_page_encodes_cursor_and_filters_in_query_string(self) -> None:
+        original_ensure_api_running = agentmemory_http_client.ensure_api_running
+        original_request = agentmemory_http_client._request
+        captured: dict[str, object] = {}
+        try:
+            agentmemory_http_client.ensure_api_running = lambda: None  # type: ignore[assignment]
+
+            def fake_request(method: str, path: str, payload=None):
+                captured["method"] = method
+                captured["path"] = path
+                return {"items": [], "next_cursor": None, "pagination_supported": True}
+
+            agentmemory_http_client._request = fake_request  # type: ignore[assignment]
+            agentmemory_http_client.proxy_list_page(user_id="demo", cursor="abc", filters={"topic": "docs"})
+        finally:
+            agentmemory_http_client.ensure_api_running = original_ensure_api_running  # type: ignore[assignment]
+            agentmemory_http_client._request = original_request  # type: ignore[assignment]
+
+        self.assertEqual(captured["method"], "GET")
+        self.assertIn("/memories/page?", str(captured["path"]))
+        self.assertIn("cursor=abc", str(captured["path"]))
+        self.assertIn("filters=", str(captured["path"]))
+
+    def test_proxy_search_page_sends_cursor_in_payload(self) -> None:
+        original_ensure_api_running = agentmemory_http_client.ensure_api_running
+        original_request = agentmemory_http_client._request
+        captured: dict[str, object] = {}
+        try:
+            agentmemory_http_client.ensure_api_running = lambda: None  # type: ignore[assignment]
+
+            def fake_request(method: str, path: str, payload=None):
+                captured["method"] = method
+                captured["path"] = path
+                captured["payload"] = payload
+                return {"items": [], "next_cursor": None, "pagination_supported": True}
+
+            agentmemory_http_client._request = fake_request  # type: ignore[assignment]
+            agentmemory_http_client.proxy_search_page(query="docs", user_id="demo", cursor="abc", filters={"topic": "docs"}, rerank=False)
+        finally:
+            agentmemory_http_client.ensure_api_running = original_ensure_api_running  # type: ignore[assignment]
+            agentmemory_http_client._request = original_request  # type: ignore[assignment]
+
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/search/page")
+        self.assertEqual(captured["payload"]["cursor"], "abc")  # type: ignore[index]
+        self.assertEqual(captured["payload"]["filters"], {"topic": "docs"})  # type: ignore[index]
+
     def test_proxy_list_scopes_encodes_query_params(self) -> None:
         original_ensure_api_running = agentmemory_http_client.ensure_api_running
         original_request = agentmemory_http_client._request

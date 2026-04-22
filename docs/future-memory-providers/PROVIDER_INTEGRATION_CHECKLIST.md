@@ -24,7 +24,9 @@ Use this checklist when evaluating or implementing a future memory source for Ag
 - Determine whether the backend can support:
   - `add`
   - `search`
+  - `search_page`
   - `list`
+  - `list_page`
   - `get`
   - `update`
   - `delete`
@@ -59,8 +61,15 @@ Do not rely on provider-private storage internals unless the integration is expl
 - Define `requires_scope_for_search`
 - Define `supports_owner_process_mode`
 - Define `supports_scope_inventory`
+- Define `supports_pagination`
 
 Capabilities must describe real behavior, not desired future behavior.
+
+`supports_pagination = True` means the provider can walk large `list_memories`
+results with a stable cursor through `list_memories_page`. If search result
+pagination is also implemented, `search_memory_page` must preserve the same
+query/scope/filter/ranking semantics across pages. Do not fake cursor support
+by returning arbitrary repeated top-k results.
 
 ## Stage 5: Transport Policy
 
@@ -127,4 +136,3 @@ Suggested rule of thumb:
 - Is the user-facing narrative stronger than the implementation actually supports?
 
 If any answer is uncomfortable, the provider is not ready to be described as fully supported.
-

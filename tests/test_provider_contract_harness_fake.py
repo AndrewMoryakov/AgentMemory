@@ -51,6 +51,7 @@ class InMemoryContractProvider(BaseMemoryProvider):
             "requires_scope_for_search": False,
             "supports_owner_process_mode": False,
             "supports_scope_inventory": True,
+            "supports_pagination": False,
         }
 
     def runtime_policy(self) -> ProviderRuntimePolicy:

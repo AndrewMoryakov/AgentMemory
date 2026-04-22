@@ -2,20 +2,22 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from agentmemory.providers.base import MemoryRecord, ProviderValidationError
+from agentmemory.providers.base import MemoryPage, MemoryRecord, ProviderValidationError
 from agentmemory.runtime.config import (
     active_provider_capabilities,
     active_provider_name,
     memory_add,
     memory_list,
+    memory_list_page,
     memory_list_scopes,
 )
 
 
 EXPORT_SCOPE_LIMIT = 10_000
 EXPORT_RECORD_LIMIT = 10_000
+EXPORT_PAGE_SIZE = 500
 EXPORTED_RECORD_KEYS = (
     "id",
     "memory",
@@ -64,15 +66,90 @@ def _record_identity(record: MemoryRecord) -> str:
     )
 
 
-def _collect_export_records() -> tuple[str, list[dict[str, Any]], int, bool]:
-    provider_name = active_provider_name()
-    capabilities = active_provider_capabilities()
-    inventory = memory_list_scopes(limit=EXPORT_SCOPE_LIMIT)
+def _legacy_list_page(
+    *,
+    list_memories: Callable[..., list[MemoryRecord]],
+    provider_name: str,
+    user_id=None,
+    agent_id=None,
+    run_id=None,
+    limit=100,
+    cursor=None,
+    filters=None,
+) -> MemoryPage:
+    if cursor is not None:
+        raise ProviderValidationError("Provider does not support paginated list cursors.")
+    records = list_memories(user_id=user_id, agent_id=agent_id, run_id=run_id, limit=limit, filters=filters)
+    return {
+        "provider": provider_name,
+        "items": records,
+        "next_cursor": None,
+        "pagination_supported": False,
+    }
+
+
+def _iter_page_records(
+    *,
+    provider_name: str,
+    list_page: Callable[..., MemoryPage],
+    supports_pagination: bool,
+    user_id=None,
+    agent_id=None,
+    run_id=None,
+    filters=None,
+) -> list[dict[str, Any]]:
+    seen: dict[str, dict[str, Any]] = {}
+    cursor: str | None = None
+    while True:
+        page = list_page(
+            user_id=user_id,
+            agent_id=agent_id,
+            run_id=run_id,
+            limit=EXPORT_PAGE_SIZE if supports_pagination else EXPORT_RECORD_LIMIT,
+            cursor=cursor,
+            filters=filters,
+        )
+        records = page.get("items", [])
+        if not supports_pagination and len(records) >= EXPORT_RECORD_LIMIT:
+            raise ProviderValidationError(
+                "Export may be truncated because the provider does not support pagination "
+                f"and returned {EXPORT_RECORD_LIMIT} records."
+            )
+        for record in records:
+            seen.setdefault(
+                _record_identity(record),
+                _canonical_export_record(record, provider_name=provider_name),
+            )
+        cursor = page.get("next_cursor")
+        if not cursor:
+            break
+    return list(seen.values())
+
+
+def _collect_export_records(
+    *,
+    provider_name: str | None = None,
+    capabilities: dict[str, Any] | None = None,
+    list_scopes: Callable[..., dict[str, Any]] | None = None,
+    list_memories: Callable[..., list[MemoryRecord]] | None = None,
+    list_page: Callable[..., MemoryPage] | None = None,
+) -> tuple[str, list[dict[str, Any]], int, bool, bool]:
+    provider_name = provider_name or active_provider_name()
+    capabilities = capabilities or active_provider_capabilities()
+    list_scopes = list_scopes or memory_list_scopes
+    list_memories = list_memories or memory_list
+    supports_pagination = bool(capabilities.get("supports_pagination"))
+    page_reader = list_page or (
+        memory_list_page
+        if supports_pagination
+        else lambda **kwargs: _legacy_list_page(list_memories=list_memories, provider_name=provider_name, **kwargs)
+    )
+    inventory = list_scopes(limit=EXPORT_SCOPE_LIMIT)
     items = inventory.get("items", [])
     if len(items) >= EXPORT_SCOPE_LIMIT:
         raise ProviderValidationError(
             "Export may be truncated because scope inventory reached the current export limit. "
-            "This provider needs pagination support before larger exports are safe."
+            "Scope pagination is required before larger exports are safe."
         )
 
     seen: dict[str, dict[str, Any]] = {}
@@ -83,31 +160,30 @@ def _collect_export_records() -> tuple[str, list[dict[str, Any]], int, bool]:
         if kind not in {"user", "agent", "run"} or not isinstance(value, str) or not value:
             continue
         scoped_passes += 1
-        records = memory_list(**{f"{kind}_id": value, "limit": EXPORT_RECORD_LIMIT})
-        if len(records) >= EXPORT_RECORD_LIMIT:
-            raise ProviderValidationError(
-                f"Export may be truncated for {kind} '{value}' because the provider returned "
-                f"{EXPORT_RECORD_LIMIT} records without pagination."
-            )
+        records = _iter_page_records(
+            provider_name=provider_name,
+            list_page=page_reader,
+            supports_pagination=supports_pagination,
+            **{f"{kind}_id": value},
+        )
         for record in records:
             seen.setdefault(
                 _record_identity(record),
-                _canonical_export_record(record, provider_name=provider_name),
+                record,
             )
 
     included_scopeless = False
     if capabilities.get("supports_scopeless_list"):
         included_scopeless = True
-        records = memory_list(limit=EXPORT_RECORD_LIMIT)
-        if len(records) >= EXPORT_RECORD_LIMIT:
-            raise ProviderValidationError(
-                "Export may be truncated for scopeless list because the provider returned "
-                f"{EXPORT_RECORD_LIMIT} records without pagination."
-            )
+        records = _iter_page_records(
+            provider_name=provider_name,
+            list_page=page_reader,
+            supports_pagination=supports_pagination,
+        )
         for record in records:
             seen.setdefault(
                 _record_identity(record),
-                _canonical_export_record(record, provider_name=provider_name),
+                record,
             )
 
     ordered = sorted(
@@ -119,13 +195,27 @@ def _collect_export_records() -> tuple[str, list[dict[str, Any]], int, bool]:
             str(item.get("memory") or ""),
         ),
     )
-    return provider_name, ordered, scoped_passes, included_scopeless
+    return provider_name, ordered, scoped_passes, included_scopeless, supports_pagination
 
 
-def export_memories(*, path: str) -> dict[str, Any]:
+def export_memories(
+    *,
+    path: str,
+    provider_name: str | None = None,
+    capabilities: dict[str, Any] | None = None,
+    list_scopes: Callable[..., dict[str, Any]] | None = None,
+    list_memories: Callable[..., list[MemoryRecord]] | None = None,
+    list_page: Callable[..., MemoryPage] | None = None,
+) -> dict[str, Any]:
     target = Path(path).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
-    provider_name, records, scoped_passes, included_scopeless = _collect_export_records()
+    provider_name, records, scoped_passes, included_scopeless, pagination_used = _collect_export_records(
+        provider_name=provider_name,
+        capabilities=capabilities,
+        list_scopes=list_scopes,
+        list_memories=list_memories,
+        list_page=list_page,
+    )
     with target.open("w", encoding="utf-8", newline="\n") as handle:
         for record in records:
             handle.write(json.dumps(record, ensure_ascii=True, sort_keys=True, default=str))
@@ -136,6 +226,7 @@ def export_memories(*, path: str) -> dict[str, Any]:
         "exported": len(records),
         "scoped_passes": scoped_passes,
         "included_scopeless": included_scopeless,
+        "pagination_used": pagination_used,
         "format": "jsonl",
     }
 
@@ -169,11 +260,12 @@ def _import_metadata(record: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
-def import_memories(*, path: str) -> dict[str, Any]:
+def import_memories(*, path: str, add_memory: Callable[..., MemoryRecord] | None = None, provider_name: str | None = None) -> dict[str, Any]:
     source = Path(path).expanduser()
     if not source.exists():
         raise ProviderValidationError(f"Import file not found: {source}")
 
+    add_memory = add_memory or memory_add
     imported = 0
     with source.open("r", encoding="utf-8") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
@@ -189,7 +281,7 @@ def import_memories(*, path: str) -> dict[str, Any]:
             memory_text = record.get("memory")
             if not isinstance(memory_text, str) or not memory_text.strip():
                 raise ProviderValidationError(f"Imported line {line_number} is missing a non-empty 'memory' field.")
-            memory_add(
+            add_memory(
                 messages=[{"role": "user", "content": memory_text}],
                 user_id=record.get("user_id"),
                 agent_id=record.get("agent_id"),
@@ -202,7 +294,7 @@ def import_memories(*, path: str) -> dict[str, Any]:
 
     return {
         "path": str(source.resolve()),
-        "provider": active_provider_name(),
+        "provider": provider_name or active_provider_name(),
         "imported": imported,
         "format": "jsonl",
     }

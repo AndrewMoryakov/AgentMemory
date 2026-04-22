@@ -52,6 +52,14 @@ class ProviderCapabilities(TypedDict):
     requires_scope_for_search: bool
     supports_owner_process_mode: bool
     supports_scope_inventory: bool
+    supports_pagination: bool
+
+
+class MemoryPage(TypedDict):
+    provider: str
+    items: list[MemoryRecord]
+    next_cursor: str | None
+    pagination_supported: bool
 
 
 class ProviderRuntimePolicy(TypedDict):
@@ -212,9 +220,56 @@ class BaseMemoryProvider(ABC):
     def search_memory(self, *, query, user_id=None, agent_id=None, run_id=None, limit=10, filters=None, threshold=None, rerank=True) -> list[MemoryRecord]:
         raise NotImplementedError
 
+    def search_memory_page(
+        self,
+        *,
+        query,
+        user_id=None,
+        agent_id=None,
+        run_id=None,
+        limit=10,
+        cursor=None,
+        filters=None,
+        threshold=None,
+        rerank=True,
+    ) -> MemoryPage:
+        if cursor is not None:
+            raise ProviderCapabilityError(f"{self.display_name} does not support paginated search cursors.")
+        return {
+            "provider": self.provider_name,
+            "items": self.search_memory(
+                query=query,
+                user_id=user_id,
+                agent_id=agent_id,
+                run_id=run_id,
+                limit=limit,
+                filters=filters,
+                threshold=threshold,
+                rerank=rerank,
+            ),
+            "next_cursor": None,
+            "pagination_supported": False,
+        }
+
     @abstractmethod
     def list_memories(self, *, user_id=None, agent_id=None, run_id=None, limit=100, filters=None) -> list[MemoryRecord]:
         raise NotImplementedError
+
+    def list_memories_page(self, *, user_id=None, agent_id=None, run_id=None, limit=100, cursor=None, filters=None) -> MemoryPage:
+        if cursor is not None:
+            raise ProviderCapabilityError(f"{self.display_name} does not support paginated list cursors.")
+        return {
+            "provider": self.provider_name,
+            "items": self.list_memories(
+                user_id=user_id,
+                agent_id=agent_id,
+                run_id=run_id,
+                limit=limit,
+                filters=filters,
+            ),
+            "next_cursor": None,
+            "pagination_supported": False,
+        }
 
     @abstractmethod
     def get_memory(self, memory_id) -> MemoryRecord:

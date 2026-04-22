@@ -653,6 +653,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
                 "requires_scope_for_search": True,
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             },
             }
             agentmemory.get_provider = lambda: FakeProvider()  # type: ignore[assignment]
@@ -725,6 +726,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
                     "requires_scope_for_search": True,
                     "supports_owner_process_mode": True,
                     "supports_scope_inventory": True,
+                "supports_pagination": False,
                 },
             }
             agentmemory.get_provider = lambda: FakeProvider()  # type: ignore[assignment]
@@ -772,6 +774,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
                 "requires_scope_for_search": True,
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             },
             }
             agentmemory.sys.stdout = buffer
@@ -813,6 +816,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
                 "requires_scope_for_search": True,
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             },
             }
             agentmemory.sys.stdout = buffer
@@ -852,6 +856,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
                 "requires_scope_for_search": False,
                 "supports_owner_process_mode": False,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             },
             }
             agentmemory.sys.stdout = buffer

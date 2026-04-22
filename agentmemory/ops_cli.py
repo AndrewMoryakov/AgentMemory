@@ -57,12 +57,31 @@ def main() -> int:
     search_parser.add_argument("--filters")
     search_parser.add_argument("--no-rerank", action="store_true")
 
+    search_page_parser = subparsers.add_parser("search-page")
+    search_page_parser.add_argument("query")
+    search_page_parser.add_argument("--user-id")
+    search_page_parser.add_argument("--agent-id")
+    search_page_parser.add_argument("--run-id")
+    search_page_parser.add_argument("--limit", type=int, default=10)
+    search_page_parser.add_argument("--cursor")
+    search_page_parser.add_argument("--threshold", type=float)
+    search_page_parser.add_argument("--filters")
+    search_page_parser.add_argument("--no-rerank", action="store_true")
+
     list_parser = subparsers.add_parser("list")
     list_parser.add_argument("--user-id")
     list_parser.add_argument("--agent-id")
     list_parser.add_argument("--run-id")
     list_parser.add_argument("--limit", type=int, default=100)
     list_parser.add_argument("--filters")
+
+    list_page_parser = subparsers.add_parser("list-page")
+    list_page_parser.add_argument("--user-id")
+    list_page_parser.add_argument("--agent-id")
+    list_page_parser.add_argument("--run-id")
+    list_page_parser.add_argument("--limit", type=int, default=100)
+    list_page_parser.add_argument("--cursor")
+    list_page_parser.add_argument("--filters")
 
     reconcile_parser = subparsers.add_parser("reconcile")
     reconcile_parser.add_argument("--user-id")
@@ -108,8 +127,16 @@ def main() -> int:
             result = OPERATIONS["search"].execute(cli_operation_source("search", args, parse_json_arg=parse_metadata))
             print_json(result)
             return 0
+        if args.command == "search-page":
+            result = OPERATIONS["search_page"].execute(cli_operation_source("search-page", args, parse_json_arg=parse_metadata))
+            print_json(result)
+            return 0
         if args.command == "list":
             result = OPERATIONS["list"].execute(cli_operation_source("list", args, parse_json_arg=parse_metadata))
+            print_json(result)
+            return 0
+        if args.command == "list-page":
+            result = OPERATIONS["list_page"].execute(cli_operation_source("list-page", args, parse_json_arg=parse_metadata))
             print_json(result)
             return 0
         if args.command == "reconcile":

@@ -11,7 +11,9 @@ from agentmemory.runtime.http_client import (
     proxy_health,
     proxy_list_scopes,
     proxy_list,
+    proxy_list_page,
     proxy_search,
+    proxy_search_page,
     proxy_update,
     should_proxy_to_api,
 )
@@ -24,7 +26,9 @@ from agentmemory.runtime.config import (
     memory_get,
     memory_list_scopes,
     memory_list,
+    memory_list_page,
     memory_search,
+    memory_search_page,
     memory_update,
 )
 from agentmemory.runtime import lifecycle as lifecycle_module
@@ -198,11 +202,41 @@ def _execute_list_scopes(source: dict[str, Any]) -> Any:
 
 
 def _execute_export(source: dict[str, Any]) -> Any:
-    return portability_module.export_memories(path=source["path"])
+    provider_name = active_provider_name()
+    capabilities = active_provider_capabilities()
+    return portability_module.export_memories(
+        path=source["path"],
+        provider_name=provider_name,
+        capabilities=capabilities,
+        list_scopes=lambda **kwargs: execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_list_scopes(**kwargs),
+            proxy_call=lambda: proxy_list_scopes(**kwargs),
+        ),
+        list_memories=lambda **kwargs: execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_list(**kwargs),
+            proxy_call=lambda: proxy_list(**kwargs),
+        ),
+        list_page=lambda **kwargs: execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_list_page(**kwargs),
+            proxy_call=lambda: proxy_list_page(**kwargs),
+        ),
+    )
 
 
 def _execute_import(source: dict[str, Any]) -> Any:
-    return portability_module.import_memories(path=source["path"])
+    provider_name = active_provider_name()
+    return portability_module.import_memories(
+        path=source["path"],
+        provider_name=provider_name,
+        add_memory=lambda **kwargs: execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_add(**kwargs),
+            proxy_call=lambda: proxy_add(**kwargs),
+        ),
+    )
 
 
 def _filter_unexpired_with_limit_refill(
@@ -256,6 +290,21 @@ def _execute_search(source: dict[str, Any]) -> Any:
     )
 
 
+def _execute_search_page(source: dict[str, Any]) -> Any:
+    kwargs = validate_and_build_search_kwargs(
+        provider_name=active_provider_name(),
+        capabilities=active_provider_capabilities(),
+        source=source,
+        default_limit=10,
+    )
+    kwargs["cursor"] = source.get("cursor")
+    return execute_transport_operation(
+        use_proxy=should_proxy_to_api(),
+        local_call=lambda: memory_search_page(**kwargs),
+        proxy_call=lambda: proxy_search_page(**kwargs),
+    )
+
+
 def _execute_list(source: dict[str, Any]) -> Any:
     kwargs = validate_and_build_list_kwargs(
         provider_name=active_provider_name(),
@@ -271,6 +320,21 @@ def _execute_list(source: dict[str, Any]) -> Any:
             local_call=lambda: memory_list(**attempt_kwargs),
             proxy_call=lambda: proxy_list(**attempt_kwargs),
         ),
+    )
+
+
+def _execute_list_page(source: dict[str, Any]) -> Any:
+    kwargs = validate_and_build_list_kwargs(
+        provider_name=active_provider_name(),
+        capabilities=active_provider_capabilities(),
+        source=source,
+        default_limit=100,
+    )
+    kwargs["cursor"] = source.get("cursor")
+    return execute_transport_operation(
+        use_proxy=should_proxy_to_api(),
+        local_call=lambda: memory_list_page(**kwargs),
+        proxy_call=lambda: proxy_list_page(**kwargs),
     )
 
 
@@ -486,6 +550,29 @@ OPERATIONS: dict[str, OperationSpec] = {
         },
         execute=_execute_search,
     ),
+    "search_page": OperationSpec(
+        name="search_page",
+        mcp_name="memory_search_page",
+        title="Search Memory Page",
+        description="Search one cursor page of shared memory.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "user_id": {"type": "string"},
+                "agent_id": {"type": "string"},
+                "run_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 10, "minimum": 1},
+                "cursor": {"type": "string"},
+                "threshold": {"type": "number"},
+                "filters": {"type": "object"},
+                "rerank": {"type": "boolean", "default": True},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        execute=_execute_search_page,
+    ),
     "list": OperationSpec(
         name="list",
         mcp_name="memory_list",
@@ -503,6 +590,25 @@ OPERATIONS: dict[str, OperationSpec] = {
             "additionalProperties": False,
         },
         execute=_execute_list,
+    ),
+    "list_page": OperationSpec(
+        name="list_page",
+        mcp_name="memory_list_page",
+        title="List Memories Page",
+        description="List one cursor page of memories for a user, agent, or run.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "agent_id": {"type": "string"},
+                "run_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 100, "minimum": 1},
+                "cursor": {"type": "string"},
+                "filters": {"type": "object"},
+            },
+            "additionalProperties": False,
+        },
+        execute=_execute_list_page,
     ),
     "reconcile": OperationSpec(
         name="reconcile",

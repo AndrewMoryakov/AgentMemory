@@ -20,6 +20,7 @@ class AgentMemoryGuidanceTests(unittest.TestCase):
                 "requires_scope_for_search": True,
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             },
             {"transport_mode": "owner_process_proxy"},
         )
@@ -44,6 +45,7 @@ class AgentMemoryGuidanceTests(unittest.TestCase):
                 "requires_scope_for_search": False,
                 "supports_owner_process_mode": False,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             },
             {"transport_mode": "direct"},
             limit=1,
@@ -67,6 +69,7 @@ class AgentMemoryGuidanceTests(unittest.TestCase):
                 "requires_scope_for_search": True,
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             },
             {"transport_mode": "owner_process_proxy"},
             [
@@ -96,6 +99,7 @@ class AgentMemoryGuidanceTests(unittest.TestCase):
                 "requires_scope_for_search": False,
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             },
             {"transport_mode": "direct"},
         )

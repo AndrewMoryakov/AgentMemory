@@ -137,6 +137,15 @@ Format per entry:
   `tests/test_agentmemory_operation_adapters.py`,
   `tests/test_provider_contract_v1.py`, and `tests/test_agentmemory_core.py`.
 
+- **Pagination follow-up:** The provider contract now includes
+  `list_memories_page` / `search_memory_page` page shapes and
+  `supports_pagination`. `localjson` implements real cursor paging; `mem0`
+  keeps the safe single-page fallback until a backend-safe cursor strategy is
+  available. Export uses `list_memories_page` for paginated providers, removing
+  the record fixed-limit guard for those providers while keeping the guard for
+  legacy non-paginated providers. Scope inventory still has its own guard until
+  `list_scopes` pagination is added.
+
 ---
 
 ## 5. Re-enable `infer=true` with observable rewrites — or commit to "never"

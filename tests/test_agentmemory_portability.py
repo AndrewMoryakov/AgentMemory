@@ -95,6 +95,57 @@ class AgentMemoryPortabilityTests(unittest.TestCase):
         self.assertEqual(decoded[0]["metadata"], {"topic": "drink"})
         self.assertEqual(decoded[1]["provider"], "mem0")
 
+    def test_export_memories_uses_pagination_for_paginated_provider(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        export_path = Path(temp_dir.name) / "memories.jsonl"
+        records = [
+            {
+                "id": f"m-{idx}",
+                "memory": f"note {idx}",
+                "metadata": {},
+                "user_id": "u1",
+                "provider": "localjson",
+                "created_at": f"2026-01-0{idx + 1}T00:00:00Z",
+            }
+            for idx in range(3)
+        ]
+        try:
+            def fake_list_page(**kwargs):
+                cursor = int(kwargs.get("cursor") or 0)
+                limit = int(kwargs.get("limit") or 2)
+                page = records[cursor : cursor + limit]
+                next_cursor = cursor + len(page)
+                return {
+                    "provider": "localjson",
+                    "items": page,
+                    "next_cursor": str(next_cursor) if next_cursor < len(records) else None,
+                    "pagination_supported": True,
+                }
+
+            with (
+                mock.patch.object(portability, "active_provider_name", return_value="localjson"),
+                mock.patch.object(
+                    portability,
+                    "active_provider_capabilities",
+                    return_value={"supports_scopeless_list": True, "supports_pagination": True},
+                ),
+                mock.patch.object(
+                    portability,
+                    "memory_list_scopes",
+                    return_value={"provider": "localjson", "items": [], "totals": {"users": 0, "agents": 0, "runs": 0}},
+                ),
+                mock.patch.object(portability, "EXPORT_PAGE_SIZE", 2),
+                mock.patch.object(portability, "memory_list_page", side_effect=fake_list_page),
+            ):
+                payload = portability.export_memories(path=str(export_path))
+            decoded = [json.loads(line) for line in export_path.read_text(encoding="utf-8").splitlines()]
+        finally:
+            temp_dir.cleanup()
+
+        self.assertTrue(payload["pagination_used"])
+        self.assertEqual(payload["exported"], 3)
+        self.assertEqual([item["id"] for item in decoded], ["m-0", "m-1", "m-2"])
+
     def test_export_memories_rejects_possible_scope_truncation(self) -> None:
         with (
             mock.patch.object(portability, "active_provider_name", return_value="mem0"),

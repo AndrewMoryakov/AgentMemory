@@ -51,12 +51,33 @@ def cli_operation_source(
             "threshold": args.threshold,
             "rerank": not args.no_rerank,
         }
+    if command == "search-page":
+        return {
+            "query": args.query,
+            "user_id": args.user_id,
+            "agent_id": args.agent_id,
+            "run_id": args.run_id,
+            "limit": args.limit,
+            "cursor": args.cursor,
+            "filters": parse_json_arg(args.filters),
+            "threshold": args.threshold,
+            "rerank": not args.no_rerank,
+        }
     if command == "list":
         return {
             "user_id": args.user_id,
             "agent_id": args.agent_id,
             "run_id": args.run_id,
             "limit": args.limit,
+            "filters": parse_json_arg(args.filters),
+        }
+    if command == "list-page":
+        return {
+            "user_id": args.user_id,
+            "agent_id": args.agent_id,
+            "run_id": args.run_id,
+            "limit": args.limit,
+            "cursor": args.cursor,
             "filters": parse_json_arg(args.filters),
         }
     if command == "reconcile":
@@ -109,11 +130,11 @@ def http_operation_source(
             "kind": (query_params.get("kind") or [None])[0],
             "query": (query_params.get("query") or [None])[0],
         }
-    if operation_name == "search":
+    if operation_name in {"search", "search_page"}:
         return dict(payload)
     if operation_name == "update":
         return dict(payload)
-    if operation_name == "list":
+    if operation_name in {"list", "list_page"}:
         filters = None
         filters_param = (query_params.get("filters") or [None])[0]
         if filters_param:
@@ -126,6 +147,7 @@ def http_operation_source(
             "agent_id": (query_params.get("agent_id") or [None])[0],
             "run_id": (query_params.get("run_id") or [None])[0],
             "limit": int((query_params.get("limit") or ["100"])[0]),
+            **({"cursor": (query_params.get("cursor") or [None])[0]} if operation_name == "list_page" else {}),
             "filters": filters,
         }
     if operation_name in {"get", "delete"}:

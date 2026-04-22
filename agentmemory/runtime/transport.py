@@ -180,6 +180,7 @@ def capability_summary(capabilities: ProviderCapabilities) -> dict[str, str]:
         "supports_filters": "yes" if capabilities["supports_filters"] else "no",
         "supports_rerank": "yes" if capabilities["supports_rerank"] else "no",
         "supports_scope_inventory": "yes" if capabilities["supports_scope_inventory"] else "no",
+        "supports_pagination": "yes" if capabilities.get("supports_pagination") else "no",
         "requires_scope_for_search": "yes" if capabilities["requires_scope_for_search"] else "no",
         "requires_scope_for_list": "yes" if capabilities["requires_scope_for_list"] else "no",
         "supports_owner_process_mode": "yes" if capabilities["supports_owner_process_mode"] else "no",

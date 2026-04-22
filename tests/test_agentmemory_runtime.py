@@ -247,6 +247,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
     def test_memory_list_scopes_uses_active_provider(self) -> None:
         config = agentmemory_runtime.default_runtime_config()
         config["runtime"]["provider"] = "localjson"
+        config["runtime"]["runtime_dir"] = self.temp_dir.name
         config["providers"]["localjson"] = agentmemory_runtime.provider_class("localjson").default_provider_config(
             runtime_dir=self.temp_dir.name
         )

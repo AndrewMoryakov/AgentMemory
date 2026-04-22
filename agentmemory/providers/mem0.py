@@ -238,6 +238,7 @@ class Mem0Provider(BaseMemoryProvider):
             "requires_scope_for_search": True,
             "supports_owner_process_mode": True,
             "supports_scope_inventory": True,
+            "supports_pagination": False,
         }
 
     def runtime_policy(self) -> ProviderRuntimePolicy:

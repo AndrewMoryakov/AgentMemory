@@ -160,6 +160,47 @@ class AgentMemoryApiTests(unittest.TestCase):
 
         self.assertEqual(captured, [(200, {"id": "demo", "deleted": True, "via": "registry"})])
 
+    def test_get_memories_page_uses_shared_operation_registry(self) -> None:
+        handler = self._make_handler(path="/memories/page?user_id=u1&limit=25&cursor=abc")
+        captured: list[tuple[int, object]] = []
+        original_spec = agentmemory_api.OPERATIONS["list_page"]
+        try:
+            agentmemory_api.OPERATIONS["list_page"] = agentmemory_api.OPERATIONS["list_page"].__class__(
+                name="list_page",
+                mcp_name="memory_list_page",
+                title="List Memories Page",
+                description="List memories page.",
+                input_schema=original_spec.input_schema,
+                execute=lambda source: {"via": "registry", **source},
+            )
+            handler._send = lambda status, payload: captured.append((status, payload))  # type: ignore[assignment]
+            handler.do_GET()
+        finally:
+            agentmemory_api.OPERATIONS["list_page"] = original_spec
+
+        self.assertEqual(captured, [(200, {"via": "registry", "user_id": "u1", "agent_id": None, "run_id": None, "limit": 25, "cursor": "abc", "filters": None})])
+
+    def test_post_search_page_uses_shared_operation_registry(self) -> None:
+        body = json.dumps({"query": "demo", "limit": 2, "cursor": "2"}).encode("utf-8")
+        handler = self._make_handler(path="/search/page", method="POST", body=body)
+        captured: list[tuple[int, object]] = []
+        original_spec = agentmemory_api.OPERATIONS["search_page"]
+        try:
+            agentmemory_api.OPERATIONS["search_page"] = agentmemory_api.OPERATIONS["search_page"].__class__(
+                name="search_page",
+                mcp_name="memory_search_page",
+                title="Search Memory Page",
+                description="Search memories page.",
+                input_schema=original_spec.input_schema,
+                execute=lambda source: {"via": "registry", **source},
+            )
+            handler._send = lambda status, payload: captured.append((status, payload))  # type: ignore[assignment]
+            handler.do_POST()
+        finally:
+            agentmemory_api.OPERATIONS["search_page"] = original_spec
+
+        self.assertEqual(captured, [(200, {"via": "registry", "query": "demo", "limit": 2, "cursor": "2"})])
+
     def test_post_search_rejects_oversized_request_body(self) -> None:
         handler = self._make_handler(path="/search", method="POST", body=b"{}")
         captured: list[tuple[int, object]] = []

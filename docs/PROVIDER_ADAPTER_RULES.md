@@ -26,7 +26,9 @@ Providers accept only normalized AgentMemory operation inputs:
 
 - `add_memory(messages, user_id, agent_id, run_id, metadata, infer, memory_type)`
 - `search_memory(query, user_id, agent_id, run_id, limit, filters, threshold, rerank)`
+- `search_memory_page(query, user_id, agent_id, run_id, limit, cursor, filters, threshold, rerank)`
 - `list_memories(user_id, agent_id, run_id, limit, filters)`
+- `list_memories_page(user_id, agent_id, run_id, limit, cursor, filters)`
 - `get_memory(memory_id)`
 - `update_memory(memory_id, data, metadata)`
 - `delete_memory(memory_id)`
@@ -81,9 +83,33 @@ Examples:
 - rerank support
 - update/delete support
 - scopeless list/search support
+- cursor pagination support
 - owner-process requirements
 
 If a provider cannot reliably support a feature, it must declare that feature unsupported.
+
+### Pagination Contract
+
+Providers that declare `supports_pagination = True` must implement stable cursor pagination for `list_memories_page`.
+
+The returned page shape is:
+
+- `provider`
+- `items`
+- `next_cursor`
+- `pagination_supported`
+
+Rules:
+
+- `list_memories(...)` remains the backwards-compatible first-page convenience API.
+- `list_memories_page(...)` is the provider-neutral API for walking large record sets.
+- `next_cursor = None` means the walk is complete.
+- Cursor values are provider-owned opaque strings; callers must pass them back unchanged.
+- Search pagination uses the same page shape through `search_memory_page(...)`, but providers must only expose real cursor behavior when they can keep ranking/order semantics stable enough for repeated page calls.
+- Providers without real cursor support may rely on the base fallback, which returns one page and rejects non-null cursors.
+- Shared layers must not inspect provider-private storage to emulate pagination.
+
+Provider-neutral export uses `list_memories_page(...)` when `supports_pagination = True`. If a provider does not support pagination, export intentionally remains guarded by the fixed legacy limit so it cannot silently truncate data.
 
 ### 5. Scope Semantics
 

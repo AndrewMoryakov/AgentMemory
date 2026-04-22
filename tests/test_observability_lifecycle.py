@@ -29,6 +29,7 @@ _BASE_CAPS = {
     "requires_scope_for_search": True,
     "supports_owner_process_mode": True,
     "supports_scope_inventory": True,
+                "supports_pagination": False,
 }
 
 

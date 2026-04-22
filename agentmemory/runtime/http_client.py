@@ -183,6 +183,25 @@ def proxy_search(*, query, user_id=None, agent_id=None, run_id=None, limit=10, f
     )
 
 
+def proxy_search_page(*, query, user_id=None, agent_id=None, run_id=None, limit=10, cursor=None, filters=None, threshold=None, rerank):
+    ensure_api_running()
+    return _request(
+        "POST",
+        "/search/page",
+        {
+            "query": query,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "run_id": run_id,
+            "limit": limit,
+            "cursor": cursor,
+            "filters": filters,
+            "threshold": threshold,
+            "rerank": rerank,
+        },
+    )
+
+
 def proxy_list(*, user_id=None, agent_id=None, run_id=None, limit=100, filters=None):
     ensure_api_running()
     query_payload: dict[str, Any] = {
@@ -201,6 +220,30 @@ def proxy_list(*, user_id=None, agent_id=None, run_id=None, limit=100, filters=N
         }
     )
     path = "/memories"
+    if query:
+        path = f"{path}?{query}"
+    return _request("GET", path)
+
+
+def proxy_list_page(*, user_id=None, agent_id=None, run_id=None, limit=100, cursor=None, filters=None):
+    ensure_api_running()
+    query_payload: dict[str, Any] = {
+        "user_id": user_id,
+        "agent_id": agent_id,
+        "run_id": run_id,
+        "limit": limit,
+        "cursor": cursor,
+    }
+    if filters is not None:
+        query_payload["filters"] = json.dumps(filters, ensure_ascii=True, separators=(",", ":"))
+    query = urlencode(
+        {
+            key: value
+            for key, value in query_payload.items()
+            if value is not None
+        }
+    )
+    path = "/memories/page"
     if query:
         path = f"{path}?{query}"
     return _request("GET", path)

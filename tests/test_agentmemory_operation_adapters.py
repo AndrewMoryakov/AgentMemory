@@ -69,6 +69,43 @@ class AgentMemoryOperationAdaptersTests(unittest.TestCase):
 
         self.assertEqual(source, {"user_id": "u1", "agent_id": None, "run_id": None, "limit": 50, "filters": {"topic": "prefs"}})
 
+    def test_cli_operation_source_builds_list_page_payload(self) -> None:
+        args = argparse.Namespace(user_id="u1", agent_id=None, run_id=None, limit=50, cursor="abc", filters=None)
+
+        source = cli_operation_source("list-page", args, parse_json_arg=lambda raw: None)
+
+        self.assertEqual(source, {"user_id": "u1", "agent_id": None, "run_id": None, "limit": 50, "cursor": "abc", "filters": None})
+
+    def test_cli_operation_source_builds_search_page_payload(self) -> None:
+        args = argparse.Namespace(
+            query="docs",
+            user_id="u1",
+            agent_id=None,
+            run_id=None,
+            limit=5,
+            cursor="10",
+            filters='{"topic":"docs"}',
+            threshold=0.2,
+            no_rerank=True,
+        )
+
+        source = cli_operation_source("search-page", args, parse_json_arg=lambda raw: {"topic": "docs"} if raw else None)
+
+        self.assertEqual(
+            source,
+            {
+                "query": "docs",
+                "user_id": "u1",
+                "agent_id": None,
+                "run_id": None,
+                "limit": 5,
+                "cursor": "10",
+                "filters": {"topic": "docs"},
+                "threshold": 0.2,
+                "rerank": False,
+            },
+        )
+
     def test_mcp_operation_source_builds_add_messages_from_text(self) -> None:
         source = mcp_operation_source("memory_add", {"text": "hello", "user_id": "u1"})
 

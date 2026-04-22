@@ -13,8 +13,9 @@ with these paths:
 
 - `GET  /agentmemory/health` — liveness probe (open)
 - `POST /agentmemory/mcp` — MCP over HTTP (bearer-token protected)
-- `POST /agentmemory/add|search|update` — legacy HTTP API (bearer-token protected)
+- `POST /agentmemory/add|search|search/page|update` — legacy HTTP API (bearer-token protected)
 - `GET  /agentmemory/memories`, `/agentmemory/admin/...` — admin/read APIs (bearer-token protected)
+- `GET  /agentmemory/memories/page` — cursor-page memory list API (bearer-token protected)
 
 The browser UI is disabled on remote deployments via `AGENTMEMORY_DISABLE_UI=1`.
 
@@ -126,6 +127,12 @@ curl -sS https://andrewm.ru/agentmemory/mcp \
 ```
 
 The first call returns `serverInfo`; the second lists the memory tools.
+
+Large memory walks should use `memory_list_page` or `memory_search_page` and
+follow `next_cursor` until it is `null`. Provider-neutral export automatically
+uses cursor pages for providers that declare `supports_pagination = true`; for
+legacy non-paginated providers it still fails closed at the fixed safety guard
+instead of silently truncating data.
 
 ## 6. Connect a remote MCP client
 

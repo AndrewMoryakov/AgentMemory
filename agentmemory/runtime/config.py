@@ -16,6 +16,7 @@ from agentmemory.providers.localjson import LocalJsonProvider
 from agentmemory.providers.mem0 import Mem0Provider
 from agentmemory.providers.base import (
     BaseMemoryProvider,
+    MemoryPage,
     MemoryRecord,
     ProviderCapabilities,
     ProviderConfigurationError,
@@ -639,12 +640,37 @@ def memory_search(*, query, user_id=None, agent_id=None, run_id=None, limit=10, 
     )
 
 
+def memory_search_page(*, query, user_id=None, agent_id=None, run_id=None, limit=10, cursor=None, filters=None, threshold=None, rerank=True):
+    return get_provider().search_memory_page(
+        query=query,
+        user_id=user_id,
+        agent_id=agent_id,
+        run_id=run_id,
+        limit=limit,
+        cursor=cursor,
+        filters=filters,
+        threshold=threshold,
+        rerank=rerank,
+    )
+
+
 def memory_list(*, user_id=None, agent_id=None, run_id=None, limit=100, filters=None):
     return get_provider().list_memories(
         user_id=user_id,
         agent_id=agent_id,
         run_id=run_id,
         limit=limit,
+        filters=filters,
+    )
+
+
+def memory_list_page(*, user_id=None, agent_id=None, run_id=None, limit=100, cursor=None, filters=None) -> MemoryPage:
+    return get_provider().list_memories_page(
+        user_id=user_id,
+        agent_id=agent_id,
+        run_id=run_id,
+        limit=limit,
+        cursor=cursor,
         filters=filters,
     )
 

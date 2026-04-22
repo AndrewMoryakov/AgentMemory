@@ -69,6 +69,44 @@ class LocalJsonProviderTests(ProviderContractHarness, unittest.TestCase):
         self.assertEqual([item["value"] for item in inventory["items"]], ["writer", "run-1", "run-2"])
         self.assertEqual(inventory["totals"], {"users": 2, "agents": 1, "runs": 2})
 
+    def test_list_memories_page_walks_multiple_cursor_pages(self) -> None:
+        created = [
+            self.provider.add_memory(messages=[{"role": "user", "content": f"note {idx}"}], user_id="u1")
+            for idx in range(3)
+        ]
+
+        first = self.provider.list_memories_page(user_id="u1", limit=2)
+        second = self.provider.list_memories_page(user_id="u1", limit=2, cursor=first["next_cursor"])
+
+        self.assertTrue(first["pagination_supported"])
+        self.assertEqual(len(first["items"]), 2)
+        self.assertIsNotNone(first["next_cursor"])
+        self.assertEqual(len(second["items"]), 1)
+        self.assertIsNone(second["next_cursor"])
+        self.assertEqual(
+            {item["id"] for item in [*first["items"], *second["items"]]},
+            {item["id"] for item in created},
+        )
+
+    def test_search_memory_page_walks_multiple_cursor_pages(self) -> None:
+        created = [
+            self.provider.add_memory(messages=[{"role": "user", "content": f"shared alpha note {idx}"}], user_id="u1")
+            for idx in range(3)
+        ]
+
+        first = self.provider.search_memory_page(query="alpha", user_id="u1", limit=2, rerank=False)
+        second = self.provider.search_memory_page(query="alpha", user_id="u1", limit=2, cursor=first["next_cursor"], rerank=False)
+
+        self.assertTrue(first["pagination_supported"])
+        self.assertEqual(len(first["items"]), 2)
+        self.assertIsNotNone(first["next_cursor"])
+        self.assertEqual(len(second["items"]), 1)
+        self.assertIsNone(second["next_cursor"])
+        self.assertEqual(
+            {item["id"] for item in [*first["items"], *second["items"]]},
+            {item["id"] for item in created},
+        )
+
     def test_concurrent_process_writes_preserve_all_records(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             storage_path = f"{temp_dir}/localjson-memories.json"

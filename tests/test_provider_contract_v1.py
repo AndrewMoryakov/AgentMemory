@@ -236,6 +236,7 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
                 "requires_scope_for_search": True,
                 "supports_owner_process_mode": True,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             }
             agentmemory_operations.active_provider_name = lambda: "mem0"  # type: ignore[assignment]
             agentmemory_operations.OPERATIONS["search"] = original_search_spec
@@ -288,6 +289,7 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
                 "requires_scope_for_search": False,
                 "supports_owner_process_mode": False,
                 "supports_scope_inventory": True,
+                "supports_pagination": False,
             }
             agentmemory_operations.active_provider_name = lambda: "localjson"  # type: ignore[assignment]
             agentmemory_operations.memory_search = fake_memory_search  # type: ignore[assignment]

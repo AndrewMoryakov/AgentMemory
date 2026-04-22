@@ -872,6 +872,7 @@ def command_doctor(_: argparse.Namespace) -> int:
     print(info(f"Supports filters: {capabilities['supports_filters']}"))
     print(info(f"Supports rerank: {capabilities['supports_rerank']}"))
     print(info(f"Scope inventory: {capabilities['supports_scope_inventory']}"))
+    print(info(f"Pagination: {capabilities['supports_pagination']}"))
     print(info(f"Search requires scope: {capabilities['requires_scope_for_search']}"))
     print(info(f"List requires scope: {capabilities['requires_scope_for_list']}"))
     print(info(f"Owner-process mode: {capabilities['supports_owner_process_mode']}"))

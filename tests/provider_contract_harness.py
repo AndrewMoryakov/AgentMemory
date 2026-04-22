@@ -105,8 +105,29 @@ class ProviderContractHarness(ABC):
             "requires_scope_for_search",
             "supports_owner_process_mode",
             "supports_scope_inventory",
+            "supports_pagination",
         }
         self.assertEqual(set(capabilities.keys()), expected_keys)
+
+    def test_list_memories_page_returns_canonical_page_shape(self) -> None:
+        self.create_memory("page one")
+        page = self.provider.list_memories_page(**self.default_scope(), limit=1)
+
+        self.assertEqual(page["provider"], self.provider.provider_name)
+        self.assertIn("items", page)
+        self.assertIn("next_cursor", page)
+        self.assertIn("pagination_supported", page)
+        self.assertLessEqual(len(page["items"]), 1)
+
+    def test_search_memory_page_returns_canonical_page_shape(self) -> None:
+        self.create_memory("searchable page one")
+        page = self.provider.search_memory_page(query="searchable", **self.default_scope(), limit=1, rerank=False)
+
+        self.assertEqual(page["provider"], self.provider.provider_name)
+        self.assertIn("items", page)
+        self.assertIn("next_cursor", page)
+        self.assertIn("pagination_supported", page)
+        self.assertLessEqual(len(page["items"]), 1)
 
     def test_runtime_policy_exposes_transport_mode_contract(self) -> None:
         runtime_policy = self.provider.runtime_policy()
