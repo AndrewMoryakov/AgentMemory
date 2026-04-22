@@ -1,4 +1,5 @@
 import argparse
+import io
 import json
 import os
 import signal
@@ -38,6 +39,7 @@ from agentmemory.runtime.config import (
     load_runtime_config_with_source,
     provider_class,
     provider_registry,
+    rebuild_scope_registry,
     remove_api_state,
     runtime_identity,
     runtime_info,
@@ -62,6 +64,7 @@ OPS_CLI_MODULE = 'agentmemory.ops_cli'
 API_LOG_FILE = BASE_DIR / 'data' / 'agentmemory-api.log'
 API_ERR_FILE = BASE_DIR / 'data' / 'agentmemory-api.err.log'
 PLACEHOLDER_KEYS = {'paste-your-openrouter-key-here', 'YOUR_OPENROUTER_API_KEY'}
+API_STOP_GRACE_SECONDS = 5.0
 
 
 def has_real_openrouter_key(value: str | None) -> bool:
@@ -540,25 +543,62 @@ def stop_api_process() -> tuple[bool, str]:
         remove_api_state()
         return True, 'AgentMemory API process is not running.'
 
+    def _wait_for_exit(timeout_seconds: float) -> bool:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if not process_exists(pid):
+                return True
+            time.sleep(0.1)
+        return not process_exists(pid)
+
     if is_windows():
-        result = subprocess.run(
-            ['taskkill', '/PID', str(pid), '/F'],
+        graceful = subprocess.run(
+            ['taskkill', '/PID', str(pid)],
             check=False,
             capture_output=True,
             text=True,
             encoding='utf-8',
             errors='replace',
         )
-        success = result.returncode == 0
-        details = (result.stderr or result.stdout or f'Failed to stop AgentMemory API process {pid}').strip()
+        if _wait_for_exit(API_STOP_GRACE_SECONDS):
+            success = True
+            details = f'Stopped AgentMemory API process {pid}'
+        else:
+            forced = subprocess.run(
+                ['taskkill', '/PID', str(pid), '/F'],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+            )
+            success = forced.returncode == 0 and _wait_for_exit(1.0)
+            details = (
+                forced.stderr
+                or forced.stdout
+                or graceful.stderr
+                or graceful.stdout
+                or f'Failed to stop AgentMemory API process {pid}'
+            ).strip()
     else:
         try:
             os.kill(pid, signal.SIGTERM)
-            success = True
-            details = f'Stopped AgentMemory API process {pid}'
         except OSError as exc:
             success = False
             details = str(exc)
+        else:
+            if _wait_for_exit(API_STOP_GRACE_SECONDS):
+                success = True
+                details = f'Stopped AgentMemory API process {pid}'
+            else:
+                try:
+                    os.kill(pid, getattr(signal, 'SIGKILL', signal.SIGTERM))
+                except OSError as exc:
+                    success = False
+                    details = str(exc)
+                else:
+                    success = _wait_for_exit(1.0)
+                    details = f'Stopped AgentMemory API process {pid}'
     API_PID_FILE.unlink(missing_ok=True)
     remove_api_state()
     if success:
@@ -728,6 +768,14 @@ def command_list_scopes(args: argparse.Namespace) -> int:
     return result.returncode
 
 
+def command_rebuild_scope_registry(_: argparse.Namespace) -> int:
+    heading('AgentMemory Scope Registry')
+    payload = rebuild_scope_registry()
+    print(ok(f"Rebuilt scope registry for provider '{payload['provider']}'"))
+    print(json.dumps(payload, ensure_ascii=True, indent=2))
+    return 0
+
+
 def command_doctor(_: argparse.Namespace) -> int:
     heading('AgentMemory Doctor')
     config_source = load_runtime_config_with_source()[1]
@@ -761,6 +809,15 @@ def command_doctor(_: argparse.Namespace) -> int:
     print(info(f"Owner-process mode: {capabilities['supports_owner_process_mode']}"))
     print(info(f"Transport mode: {info_payload.get('runtime_policy', {}).get('transport_mode', 'direct')}"))
     print(info(f"Provider contract: {info_payload.get('provider_contract', {}).get('contract_version', 'unknown')}"))
+    scope_registry_info = info_payload.get("scope_registry", {})
+    if isinstance(scope_registry_info, dict):
+        print(info(f"Scope registry: {scope_registry_info.get('status', 'unknown')}"))
+        if scope_registry_info.get("status") == "needs_rebuild":
+            failed_operation = scope_registry_info.get("last_failed_operation") or "unknown"
+            memory_id = scope_registry_info.get("memory_id") or "unknown"
+            print(warn(f"Scope registry needs rebuild after {failed_operation} for memory {memory_id}."))
+            if scope_registry_info.get("last_error"):
+                print(warn(f"Scope registry last error: {scope_registry_info['last_error']}"))
     print_provider_guidance(
         provider_guidance(
             info_payload['provider'],
@@ -983,6 +1040,12 @@ def build_parser() -> argparse.ArgumentParser:
     list_scopes_parser.add_argument('--query')
     list_scopes_parser.set_defaults(func=command_list_scopes)
 
+    rebuild_scope_registry_parser = subparsers.add_parser(
+        'rebuild-scope-registry',
+        help='Rebuild the provider-owned scope inventory registry for the active provider.',
+    )
+    rebuild_scope_registry_parser.set_defaults(func=command_rebuild_scope_registry)
+
     doctor_parser = subparsers.add_parser('doctor', help='Check venv, config, key availability, and health.')
     doctor_parser.set_defaults(func=command_doctor)
 
@@ -1027,10 +1090,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_command_argv(argv: list[str]) -> int:
+def run_command_argv(argv: list[str], stdin_text: str | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    if stdin_text is None:
+        return args.func(args)
+    original_stdin = sys.stdin
+    try:
+        sys.stdin = io.StringIO(stdin_text)
+        return args.func(args)
+    finally:
+        sys.stdin = original_stdin
 
 
 def interactive_input(prompt_text: str, session=None, *, interrupt_returns_exit: bool = False) -> str:

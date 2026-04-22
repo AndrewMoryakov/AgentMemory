@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from agentmemory.platform import launcher_path
+from agentmemory.runtime.atomic_io import atomic_write_json
 from agentmemory.runtime.config import BASE_DIR
 
 RUN_MCP = launcher_path(BASE_DIR, "run-agentmemory-mcp")
@@ -88,8 +89,7 @@ def load_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(path, payload)
 
 
 def stdio_server_config() -> dict[str, Any]:

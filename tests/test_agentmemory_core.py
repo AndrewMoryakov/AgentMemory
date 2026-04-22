@@ -95,6 +95,28 @@ class AgentMemoryCoreTests(unittest.TestCase):
             agentmemory_runtime.clear_caches()
             temp_dir.cleanup()
 
+    def test_command_rebuild_scope_registry_prints_summary(self) -> None:
+        original_rebuild_scope_registry = agentmemory.rebuild_scope_registry
+        original_stdout = agentmemory.sys.stdout
+        buffer = StringIO()
+        try:
+            agentmemory.rebuild_scope_registry = lambda: {  # type: ignore[assignment]
+                "provider": "mem0",
+                "records": 3,
+                "users": 1,
+                "agents": 1,
+                "runs": 1,
+            }
+            agentmemory.sys.stdout = buffer
+
+            rc = agentmemory.command_rebuild_scope_registry(argparse.Namespace())
+        finally:
+            agentmemory.rebuild_scope_registry = original_rebuild_scope_registry  # type: ignore[assignment]
+            agentmemory.sys.stdout = original_stdout
+
+        self.assertEqual(rc, 0)
+        self.assertIn("Rebuilt scope registry for provider 'mem0'", buffer.getvalue())
+
     def test_resolve_api_start_port_returns_requested_port_when_free(self) -> None:
         original_can_bind_api_port = agentmemory.can_bind_api_port
         try:
@@ -198,14 +220,17 @@ class AgentMemoryCoreTests(unittest.TestCase):
         original_process_exists = agentmemory.process_exists
         original_is_windows = agentmemory.is_windows
         original_os_kill = agentmemory.os.kill
+        original_time_sleep = agentmemory.time.sleep
         killed: dict[str, object] = {}
+        process_states = iter([True, False])
         try:
             agentmemory.API_PID_FILE = base / "agentmemory-api.pid"
             agentmemory.read_api_pid = lambda: None  # type: ignore[assignment]
             agentmemory.managed_api_listener_pid = lambda host, port: 333  # type: ignore[assignment]
-            agentmemory.process_exists = lambda pid: pid == 333  # type: ignore[assignment]
+            agentmemory.process_exists = lambda pid: next(process_states)  # type: ignore[assignment]
             agentmemory.is_windows = lambda: False  # type: ignore[assignment]
             agentmemory.os.kill = lambda pid, sig: killed.update({"pid": pid, "sig": sig})  # type: ignore[assignment]
+            agentmemory.time.sleep = lambda seconds: None  # type: ignore[assignment]
             agentmemory.remove_api_state = lambda: None  # type: ignore[assignment]
 
             ok_result, message = agentmemory.stop_api_process()
@@ -217,10 +242,120 @@ class AgentMemoryCoreTests(unittest.TestCase):
             agentmemory.process_exists = original_process_exists  # type: ignore[assignment]
             agentmemory.is_windows = original_is_windows  # type: ignore[assignment]
             agentmemory.os.kill = original_os_kill  # type: ignore[assignment]
+            agentmemory.time.sleep = original_time_sleep  # type: ignore[assignment]
             temp_dir.cleanup()
 
         self.assertTrue(ok_result)
         self.assertEqual(killed["pid"], 333)
+        self.assertIn("Stopped AgentMemory API process 333", message)
+
+    def test_stop_api_process_windows_tries_graceful_before_force(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        base = Path(temp_dir.name)
+        original_api_pid_file = agentmemory.API_PID_FILE
+        original_remove_api_state = agentmemory.remove_api_state
+        original_managed_api_listener_pid = agentmemory.managed_api_listener_pid
+        original_read_api_pid = agentmemory.read_api_pid
+        original_process_exists = agentmemory.process_exists
+        original_is_windows = agentmemory.is_windows
+        original_subprocess_run = agentmemory.subprocess.run
+        original_time_sleep = agentmemory.time.sleep
+        commands: list[list[str]] = []
+        process_states = iter([True, True, False])
+
+        class FakeCompleted:
+            def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        try:
+            agentmemory.API_PID_FILE = base / "agentmemory-api.pid"
+            agentmemory.read_api_pid = lambda: None  # type: ignore[assignment]
+            agentmemory.managed_api_listener_pid = lambda host, port: 333  # type: ignore[assignment]
+            agentmemory.process_exists = lambda pid: next(process_states)  # type: ignore[assignment]
+            agentmemory.is_windows = lambda: True  # type: ignore[assignment]
+            agentmemory.time.sleep = lambda seconds: None  # type: ignore[assignment]
+            agentmemory.remove_api_state = lambda: None  # type: ignore[assignment]
+
+            def fake_run(command, **kwargs):
+                commands.append(list(command))
+                return FakeCompleted(stdout="terminated")
+
+            agentmemory.subprocess.run = fake_run  # type: ignore[assignment]
+
+            ok_result, message = agentmemory.stop_api_process()
+        finally:
+            agentmemory.API_PID_FILE = original_api_pid_file
+            agentmemory.remove_api_state = original_remove_api_state  # type: ignore[assignment]
+            agentmemory.managed_api_listener_pid = original_managed_api_listener_pid  # type: ignore[assignment]
+            agentmemory.read_api_pid = original_read_api_pid  # type: ignore[assignment]
+            agentmemory.process_exists = original_process_exists  # type: ignore[assignment]
+            agentmemory.is_windows = original_is_windows  # type: ignore[assignment]
+            agentmemory.subprocess.run = original_subprocess_run  # type: ignore[assignment]
+            agentmemory.time.sleep = original_time_sleep  # type: ignore[assignment]
+            temp_dir.cleanup()
+
+        self.assertTrue(ok_result)
+        self.assertEqual(commands, [["taskkill", "/PID", "333"]])
+        self.assertIn("Stopped AgentMemory API process 333", message)
+
+    def test_stop_api_process_windows_escalates_to_force_when_graceful_fails(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        base = Path(temp_dir.name)
+        original_api_pid_file = agentmemory.API_PID_FILE
+        original_remove_api_state = agentmemory.remove_api_state
+        original_managed_api_listener_pid = agentmemory.managed_api_listener_pid
+        original_read_api_pid = agentmemory.read_api_pid
+        original_process_exists = agentmemory.process_exists
+        original_is_windows = agentmemory.is_windows
+        original_subprocess_run = agentmemory.subprocess.run
+        original_time_sleep = agentmemory.time.sleep
+        original_time_time = agentmemory.time.time
+        original_stop_grace = agentmemory.API_STOP_GRACE_SECONDS
+        commands: list[list[str]] = []
+        process_states = iter([True, True, True, True, False])
+        fake_clock = iter([0.0, 0.0, 0.02, 0.02, 0.03, 0.03])
+
+        class FakeCompleted:
+            def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        try:
+            agentmemory.API_PID_FILE = base / "agentmemory-api.pid"
+            agentmemory.read_api_pid = lambda: None  # type: ignore[assignment]
+            agentmemory.managed_api_listener_pid = lambda host, port: 333  # type: ignore[assignment]
+            agentmemory.process_exists = lambda pid: next(process_states)  # type: ignore[assignment]
+            agentmemory.is_windows = lambda: True  # type: ignore[assignment]
+            agentmemory.time.sleep = lambda seconds: None  # type: ignore[assignment]
+            agentmemory.time.time = lambda: next(fake_clock)  # type: ignore[assignment]
+            agentmemory.remove_api_state = lambda: None  # type: ignore[assignment]
+            agentmemory.API_STOP_GRACE_SECONDS = 0.01  # type: ignore[assignment]
+
+            def fake_run(command, **kwargs):
+                commands.append(list(command))
+                return FakeCompleted(stdout="terminated")
+
+            agentmemory.subprocess.run = fake_run  # type: ignore[assignment]
+
+            ok_result, message = agentmemory.stop_api_process()
+        finally:
+            agentmemory.API_PID_FILE = original_api_pid_file
+            agentmemory.remove_api_state = original_remove_api_state  # type: ignore[assignment]
+            agentmemory.managed_api_listener_pid = original_managed_api_listener_pid  # type: ignore[assignment]
+            agentmemory.read_api_pid = original_read_api_pid  # type: ignore[assignment]
+            agentmemory.process_exists = original_process_exists  # type: ignore[assignment]
+            agentmemory.is_windows = original_is_windows  # type: ignore[assignment]
+            agentmemory.subprocess.run = original_subprocess_run  # type: ignore[assignment]
+            agentmemory.time.sleep = original_time_sleep  # type: ignore[assignment]
+            agentmemory.time.time = original_time_time  # type: ignore[assignment]
+            agentmemory.API_STOP_GRACE_SECONDS = original_stop_grace  # type: ignore[assignment]
+            temp_dir.cleanup()
+
+        self.assertTrue(ok_result)
+        self.assertEqual(commands, [["taskkill", "/PID", "333"], ["taskkill", "/PID", "333", "/F"]])
         self.assertIn("Stopped AgentMemory API process 333", message)
 
     def test_start_api_process_waits_for_listener_pid_and_records_real_listener(self) -> None:
@@ -413,6 +548,7 @@ class AgentMemoryCoreTests(unittest.TestCase):
                 "config_path": "fake-config.json",
                 "api_host": "127.0.0.1",
                 "api_port": 8765,
+                "scope_registry": {"status": "ok"},
                 "runtime_policy": {"transport_mode": "owner_process_proxy"},
                 "capabilities": {
                     "supports_semantic_search": True,
@@ -453,6 +589,72 @@ class AgentMemoryCoreTests(unittest.TestCase):
         self.assertIn("Operational guidance:", output)
         self.assertIn("requires scope", output)
         self.assertIn("Env file: not present at fake.env", output)
+
+    def test_doctor_warns_when_scope_registry_needs_rebuild_without_changing_exit_behavior(self) -> None:
+        original_runtime_info = agentmemory.runtime_info
+        original_get_provider = agentmemory.get_provider
+        original_load_runtime_config_with_source = agentmemory.load_runtime_config_with_source
+        original_env_path = agentmemory.ENV_PATH
+        original_venv_python = agentmemory.VENV_PYTHON
+        original_stdout = agentmemory.sys.stdout
+        buffer = StringIO()
+
+        class FakeProvider:
+            def prerequisite_checks(self):
+                return []
+
+            def doctor_rows(self):
+                return []
+
+            def dependency_checks(self):
+                return []
+
+        try:
+            agentmemory.runtime_info = lambda: {  # type: ignore[assignment]
+                "provider": "mem0",
+                "config_path": "fake-config.json",
+                "api_host": "127.0.0.1",
+                "api_port": 8765,
+                "scope_registry": {
+                    "status": "needs_rebuild",
+                    "last_failed_operation": "add",
+                    "memory_id": "abc",
+                    "last_error": "OperationalError: boom",
+                },
+                "runtime_policy": {"transport_mode": "owner_process_proxy"},
+                "capabilities": {
+                    "supports_semantic_search": True,
+                    "supports_text_search": False,
+                    "supports_filters": True,
+                    "supports_metadata_filters": True,
+                    "supports_rerank": True,
+                    "supports_update": True,
+                    "supports_delete": True,
+                    "supports_scopeless_list": False,
+                    "requires_scope_for_list": True,
+                    "requires_scope_for_search": True,
+                    "supports_owner_process_mode": True,
+                    "supports_scope_inventory": True,
+                },
+            }
+            agentmemory.get_provider = lambda: FakeProvider()  # type: ignore[assignment]
+            agentmemory.load_runtime_config_with_source = lambda: ({}, "generic", Path("fake-config.json"))  # type: ignore[assignment]
+            agentmemory.ENV_PATH = Path("fake.env")
+            agentmemory.VENV_PYTHON = Path("missing-python.exe")
+            agentmemory.sys.stdout = buffer
+            result = agentmemory.command_doctor(argparse.Namespace())
+        finally:
+            agentmemory.runtime_info = original_runtime_info  # type: ignore[assignment]
+            agentmemory.get_provider = original_get_provider  # type: ignore[assignment]
+            agentmemory.load_runtime_config_with_source = original_load_runtime_config_with_source  # type: ignore[assignment]
+            agentmemory.ENV_PATH = original_env_path
+            agentmemory.VENV_PYTHON = original_venv_python
+            agentmemory.sys.stdout = original_stdout
+
+        output = buffer.getvalue()
+        self.assertEqual(result, 0)
+        self.assertIn("Scope registry needs rebuild after add for memory abc.", output)
+        self.assertIn("Scope registry last error: OperationalError: boom", output)
 
     def test_doctor_clients_json_includes_provider_guidance(self) -> None:
         original_run_clients_helper = agentmemory.run_clients_helper

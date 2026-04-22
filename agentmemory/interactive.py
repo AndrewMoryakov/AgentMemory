@@ -167,6 +167,18 @@ Tips
 
 def shell_intro(context: InteractiveContext) -> str:
     return render_home_screen(context)
+
+
+def _run_command(
+    run_command: Callable[..., int],
+    argv: list[str],
+    stdin_text: str | None = None,
+) -> int:
+    if stdin_text is None:
+        return run_command(argv)
+    return run_command(argv, stdin_text)
+
+
 def interactive_help(context: InteractiveContext) -> str:
     return f'''AgentMemory interactive shell
 
@@ -187,7 +199,7 @@ Slash commands
 
 Examples
   /provider localjson
-  /configure --provider mem0 --openrouter-api-key sk-or-v1-...
+  /configure --provider mem0 --openrouter-api-key-env OPENROUTER_API_KEY
   /start --host {context.api_host} --port {context.api_port}
   /ui
 '''.strip()
@@ -198,7 +210,7 @@ def run_onboarding(
     *,
     prompt: Callable[[str], str],
     emit: Callable[[str], None],
-    run_command: Callable[[list[str]], int],
+    run_command: Callable[..., int],
 ) -> int:
     emit('AgentMemory onboarding')
     emit('This is the first run. I will guide you through a minimal local setup.')
@@ -212,22 +224,24 @@ def run_onboarding(
     api_port = prompt(f'API port (default: {context.api_port}): ').strip() or str(context.api_port)
 
     install_args = ['install', '--provider', provider, '--api-host', api_host, '--api-port', api_port]
-    rc = run_command(install_args)
+    rc = _run_command(run_command, install_args)
     if rc != 0:
         return rc
 
     configure_args = ['configure', '--provider', provider, '--api-host', api_host, '--api-port', api_port]
+    configure_stdin: str | None = None
     if provider == 'mem0':
         key = prompt('OpenRouter API key (optional, press Enter to skip): ').strip()
         if key:
-            configure_args.extend(['--openrouter-api-key', key])
-    rc = run_command(configure_args)
+            configure_args.append('--openrouter-api-key-stdin')
+            configure_stdin = key
+    rc = _run_command(run_command, configure_args, configure_stdin)
     if rc != 0:
         return rc
 
     start_now = prompt('Start the API now? [Y/n]: ').strip().lower()
     if start_now in {'', 'y', 'yes'}:
-        rc = run_command(['start-api', '--host', api_host, '--port', api_port])
+        rc = _run_command(run_command, ['start-api', '--host', api_host, '--port', api_port])
         if rc == 0:
             emit(f'Console URL: http://{api_host}:{api_port}/ui')
     return rc

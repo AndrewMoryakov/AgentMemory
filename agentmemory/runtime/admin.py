@@ -7,6 +7,7 @@ from threading import Lock
 from typing import Any
 
 import agentmemory.clients as agentmemory_clients
+from agentmemory.runtime.atomic_io import atomic_write_json
 from agentmemory.runtime.config import (
     active_provider_name,
     memory_delete,
@@ -43,9 +44,8 @@ def _read_state() -> dict[str, Any]:
 
 def _write_state(payload: dict[str, Any]) -> None:
     path = admin_state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload["updated_at"] = utc_now()
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(path, payload)
 
 
 def _memory_id(record: dict[str, Any]) -> str:

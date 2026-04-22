@@ -78,6 +78,7 @@ def _original_input_text(source: dict[str, Any]) -> str | None:
 
 
 DEDUP_SCORE_THRESHOLD = 0.92
+TTL_REFILL_MAX_ATTEMPTS = 4
 
 
 def _maybe_dedup_existing(source: dict[str, Any]) -> dict[str, Any] | None:
@@ -183,6 +184,39 @@ def _execute_list_scopes(source: dict[str, Any]) -> Any:
     )
 
 
+def _filter_unexpired_with_limit_refill(
+    *,
+    kwargs: dict[str, Any],
+    default_limit: int,
+    fetch: Callable[[dict[str, Any]], Any],
+) -> Any:
+    requested_limit = kwargs.get("limit")
+    if not isinstance(requested_limit, int) or requested_limit <= 0:
+        requested_limit = default_limit
+
+    current_limit = requested_limit
+    last_unexpired: list[dict[str, Any]] = []
+
+    for _ in range(TTL_REFILL_MAX_ATTEMPTS):
+        attempt_kwargs = dict(kwargs)
+        attempt_kwargs["limit"] = current_limit
+        result = fetch(attempt_kwargs)
+        if not isinstance(result, list):
+            return result
+
+        unexpired = lifecycle_module.filter_unexpired(result)
+        if len(unexpired) >= requested_limit:
+            return unexpired[:requested_limit]
+
+        last_unexpired = unexpired
+        if len(result) < current_limit:
+            return unexpired
+
+        current_limit *= 2
+
+    return last_unexpired
+
+
 def _execute_search(source: dict[str, Any]) -> Any:
     kwargs = validate_and_build_search_kwargs(
         provider_name=active_provider_name(),
@@ -190,14 +224,15 @@ def _execute_search(source: dict[str, Any]) -> Any:
         source=source,
         default_limit=10,
     )
-    result = execute_transport_operation(
-        use_proxy=should_proxy_to_api(),
-        local_call=lambda: memory_search(**kwargs),
-        proxy_call=lambda: proxy_search(**kwargs),
+    return _filter_unexpired_with_limit_refill(
+        kwargs=kwargs,
+        default_limit=10,
+        fetch=lambda attempt_kwargs: execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_search(**attempt_kwargs),
+            proxy_call=lambda: proxy_search(**attempt_kwargs),
+        ),
     )
-    if isinstance(result, list):
-        return lifecycle_module.filter_unexpired(result)
-    return result
 
 
 def _execute_list(source: dict[str, Any]) -> Any:
@@ -207,14 +242,15 @@ def _execute_list(source: dict[str, Any]) -> Any:
         source=source,
         default_limit=100,
     )
-    result = execute_transport_operation(
-        use_proxy=should_proxy_to_api(),
-        local_call=lambda: memory_list(**kwargs),
-        proxy_call=lambda: proxy_list(**kwargs),
+    return _filter_unexpired_with_limit_refill(
+        kwargs=kwargs,
+        default_limit=100,
+        fetch=lambda attempt_kwargs: execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_list(**attempt_kwargs),
+            proxy_call=lambda: proxy_list(**attempt_kwargs),
+        ),
     )
-    if isinstance(result, list):
-        return lifecycle_module.filter_unexpired(result)
-    return result
 
 
 def _execute_get(source: dict[str, Any]) -> Any:

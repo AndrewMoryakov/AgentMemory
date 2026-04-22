@@ -62,6 +62,33 @@ class AgentMemoryInteractiveTests(unittest.TestCase):
              mock.patch('agentmemory.interactive.sys.stdout.isatty', return_value=True):
             self.assertFalse(agentmemory_interactive.prompt_toolkit_available())
 
+    def test_onboarding_passes_openrouter_key_through_stdin_not_argv(self) -> None:
+        prompts = iter([
+            'mem0',
+            '',
+            '',
+            'sk-or-v1-secret',
+            'n',
+        ])
+        commands: list[tuple[list[str], str | None]] = []
+
+        def fake_run_command(argv: list[str], stdin_text: str | None = None) -> int:
+            commands.append((argv, stdin_text))
+            return 0
+
+        result = agentmemory_interactive.run_onboarding(
+            self.make_context(),
+            prompt=lambda _text: next(prompts),
+            emit=lambda _text: None,
+            run_command=fake_run_command,
+        )
+
+        self.assertEqual(result, 0)
+        configure_argv, configure_stdin = commands[1]
+        self.assertIn('--openrouter-api-key-stdin', configure_argv)
+        self.assertNotIn('sk-or-v1-secret', configure_argv)
+        self.assertEqual(configure_stdin, 'sk-or-v1-secret')
+
 
 if __name__ == '__main__':
     unittest.main()

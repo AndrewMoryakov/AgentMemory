@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
+import sqlite3
 from uuid import uuid4
 import unittest
+from unittest import mock
 
 from agentmemory.providers.mem0 import Mem0Provider
 from agentmemory.providers.base import MemoryNotFoundError, ProviderScopeRequiredError
+from agentmemory.runtime import scope_registry
 try:
     from provider_contract_harness import ProviderContractHarness
 except ModuleNotFoundError:  # pragma: no cover
@@ -157,6 +161,23 @@ class FakeMem0MinimalAddWrapperBackend(FakeMem0Backend):
         return {"results": [{"id": record["id"], "memory": record["text"], "event": "ADD"}]}
 
 
+class FakeMem0PartialScopeAddBackend(FakeMem0Backend):
+    def add(self, messages, *, user_id=None, agent_id=None, run_id=None, metadata=None, infer=True, memory_type=None):
+        record = super().add(
+            messages,
+            user_id=user_id,
+            agent_id=agent_id,
+            run_id=run_id,
+            metadata=metadata,
+            infer=infer,
+            memory_type=memory_type,
+        )
+        return {"results": [{"id": record["id"], "memory": record["text"], "event": "ADD"}]}
+
+    def get(self, memory_id):
+        raise MemoryNotFoundError(str(memory_id))
+
+
 class FakeMem0SemanticBackend(FakeMem0Backend):
     def search(self, query, *, user_id=None, agent_id=None, run_id=None, limit=10, filters=None, threshold=None, rerank=True):
         self._require_scope(user_id=user_id, agent_id=agent_id, run_id=run_id)
@@ -210,6 +231,12 @@ class SemanticMem0Provider(HarnessMem0Provider):
         self._fake_memory = FakeMem0SemanticBackend()
 
 
+class PartialScopeAddMem0Provider(HarnessMem0Provider):
+    def __init__(self, *, runtime_config: dict[str, object], provider_config: dict[str, object]) -> None:
+        Mem0Provider.__init__(self, runtime_config=runtime_config, provider_config=provider_config)
+        self._fake_memory = FakeMem0PartialScopeAddBackend()
+
+
 class Mem0ProviderHarnessTests(ProviderContractHarness, unittest.TestCase):
     def create_provider(self, runtime_dir: str):
         return HarnessMem0Provider(
@@ -224,6 +251,48 @@ class Mem0ProviderHarnessTests(ProviderContractHarness, unittest.TestCase):
         self.assertTrue(capabilities["supports_rerank"])
         self.assertTrue(capabilities["requires_scope_for_search"])
         self.assertTrue(capabilities["supports_owner_process_mode"])
+
+    def test_load_memory_passes_api_key_in_config_without_mutating_process_env(self) -> None:
+        original_env = {
+            "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY"),
+            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY"),
+            "OPENAI_BASE_URL": os.environ.get("OPENAI_BASE_URL"),
+        }
+        captured_config: dict[str, object] = {}
+        leaked_openai_api_key = None
+        leaked_openai_base_url = None
+        provider = Mem0Provider(
+            runtime_config={"runtime_dir": self.temp_dir.name},
+            provider_config=Mem0Provider.default_provider_config(runtime_dir=self.temp_dir.name),
+        )
+        try:
+            os.environ["OPENROUTER_API_KEY"] = "sk-or-v1-test"
+            os.environ.pop("OPENAI_API_KEY", None)
+            os.environ.pop("OPENAI_BASE_URL", None)
+
+            def fake_from_config(config):
+                captured_config.update(config)
+                return object()
+
+            with mock.patch("agentmemory.providers.mem0._install_openai_usage_capture", lambda: None), \
+                 mock.patch("agentmemory.providers.mem0.Memory.from_config", side_effect=fake_from_config):
+                provider._load_memory()
+            leaked_openai_api_key = os.environ.get("OPENAI_API_KEY")
+            leaked_openai_base_url = os.environ.get("OPENAI_BASE_URL")
+        finally:
+            provider.clear_caches()
+            for key, value in original_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        llm_config = captured_config["llm"]["config"]  # type: ignore[index]
+        embedder_config = captured_config["embedder"]["config"]  # type: ignore[index]
+        self.assertEqual(llm_config["api_key"], "sk-or-v1-test")
+        self.assertEqual(embedder_config["api_key"], "sk-or-v1-test")
+        self.assertIsNone(leaked_openai_api_key)
+        self.assertIsNone(leaked_openai_base_url)
 
     def test_mem0_search_requires_scope(self) -> None:
         with self.assertRaises(ProviderScopeRequiredError):
@@ -294,7 +363,95 @@ class Mem0ProviderHarnessTests(ProviderContractHarness, unittest.TestCase):
 
         self.assertTrue(deleted["deleted"])
         self.assertEqual(deleted["id"], created["id"])
-        self.assertEqual(deleted["provider"], "mem0")
+
+    def test_partial_add_result_skips_registry_and_marks_needs_rebuild(self) -> None:
+        provider = PartialScopeAddMem0Provider(
+            runtime_config={"runtime_dir": self.temp_dir.name},
+            provider_config=Mem0Provider.default_provider_config(runtime_dir=self.temp_dir.name),
+        )
+
+        created = provider.add_memory(
+            messages=[{"role": "user", "content": "server host note"}],
+            user_id="default",
+            metadata={"topic": "ops"},
+        )
+        inventory = provider.list_scopes()
+        status = scope_registry.scope_registry_status(provider.provider_name, provider.runtime_dir)
+
+        self.assertEqual(created["memory"], "server host note")
+        self.assertEqual(inventory["totals"], {"users": 0, "agents": 0, "runs": 0})
+        self.assertEqual(status["status"], "needs_rebuild")
+        self.assertEqual(status["last_failed_operation"], "add")
+
+    def test_mem0_add_returns_success_when_registry_sync_fails(self) -> None:
+        provider = HarnessMem0Provider(
+            runtime_config={"runtime_dir": self.temp_dir.name},
+            provider_config=Mem0Provider.default_provider_config(runtime_dir=self.temp_dir.name),
+        )
+
+        with mock.patch("agentmemory.providers.mem0.scope_registry.upsert_record", side_effect=sqlite3.OperationalError("boom")):
+            created = provider.add_memory(messages=[{"role": "user", "content": "note"}], user_id="default")
+
+        records = provider.list_memories(user_id="default")
+        status = scope_registry.scope_registry_status(provider.provider_name, provider.runtime_dir)
+
+        self.assertEqual(created["memory"], "note")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(status["status"], "needs_rebuild")
+        self.assertEqual(status["last_failed_operation"], "add")
+
+    def test_mem0_update_returns_success_when_registry_sync_fails(self) -> None:
+        provider = HarnessMem0Provider(
+            runtime_config={"runtime_dir": self.temp_dir.name},
+            provider_config=Mem0Provider.default_provider_config(runtime_dir=self.temp_dir.name),
+        )
+        created = provider.add_memory(messages=[{"role": "user", "content": "old"}], user_id="default")
+
+        with mock.patch("agentmemory.providers.mem0.scope_registry.upsert_record", side_effect=sqlite3.OperationalError("boom")):
+            updated = provider.update_memory(memory_id=created["id"], data="new", metadata={"v": 2})
+
+        fetched = provider.get_memory(created["id"])
+        status = scope_registry.scope_registry_status(provider.provider_name, provider.runtime_dir)
+
+        self.assertEqual(updated["memory"], "new")
+        self.assertEqual(fetched["memory"], "new")
+        self.assertEqual(status["status"], "needs_rebuild")
+        self.assertEqual(status["last_failed_operation"], "update")
+
+    def test_mem0_delete_returns_success_when_registry_sync_fails(self) -> None:
+        provider = HarnessMem0Provider(
+            runtime_config={"runtime_dir": self.temp_dir.name},
+            provider_config=Mem0Provider.default_provider_config(runtime_dir=self.temp_dir.name),
+        )
+        created = provider.add_memory(messages=[{"role": "user", "content": "old"}], user_id="default")
+
+        with mock.patch("agentmemory.providers.mem0.scope_registry.delete_record", side_effect=sqlite3.OperationalError("boom")):
+            deleted = provider.delete_memory(memory_id=created["id"])
+
+        status = scope_registry.scope_registry_status(provider.provider_name, provider.runtime_dir)
+
+        self.assertTrue(deleted["deleted"])
+        self.assertEqual(provider.list_memories(user_id="default"), [])
+        self.assertEqual(status["status"], "needs_rebuild")
+        self.assertEqual(status["last_failed_operation"], "delete")
+
+    def test_successful_sync_clears_registry_degraded_state(self) -> None:
+        provider = HarnessMem0Provider(
+            runtime_config={"runtime_dir": self.temp_dir.name},
+            provider_config=Mem0Provider.default_provider_config(runtime_dir=self.temp_dir.name),
+        )
+        scope_registry.mark_sync_failed(
+            provider.provider_name,
+            provider.runtime_dir,
+            operation="add",
+            memory_id="missing",
+            error=sqlite3.OperationalError("boom"),
+        )
+
+        provider.add_memory(messages=[{"role": "user", "content": "ok"}], user_id="default")
+        status = scope_registry.scope_registry_status(provider.provider_name, provider.runtime_dir)
+
+        self.assertEqual(status["status"], "ok")
 
     def test_mem0_search_preserves_semantic_scores_and_threshold(self) -> None:
         provider = SemanticMem0Provider(

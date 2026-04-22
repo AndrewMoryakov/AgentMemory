@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
 from uuid import uuid4
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 from agentmemory.providers.base import (
     BaseMemoryProvider,
@@ -18,8 +26,8 @@ from agentmemory.providers.base import (
     ProviderRuntimePolicy,
     ProviderValidationError,
     ScopeInventory,
-    ScopeInventoryItem,
 )
+from agentmemory.runtime import scope_registry
 
 
 def utc_now() -> str:
@@ -99,15 +107,53 @@ class LocalJsonProvider(BaseMemoryProvider):
     def _ensure_parent(self) -> None:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _load_all(self) -> list[dict[str, Any]]:
+    @contextlib.contextmanager
+    def _file_lock(self):
+        self._ensure_parent()
+        lock_path = self.storage_path.with_suffix(self.storage_path.suffix + ".lock")
+        with lock_path.open("a+b") as lock_file:
+            lock_file.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _load_all_unlocked(self) -> list[dict[str, Any]]:
         self._ensure_parent()
         if not self.storage_path.exists():
             return []
         return json.loads(self.storage_path.read_text(encoding="utf-8"))
 
-    def _save_all(self, records: list[dict[str, Any]]) -> None:
+    def _save_all_unlocked(self, records: list[dict[str, Any]]) -> None:
         self._ensure_parent()
-        self.storage_path.write_text(json.dumps(records, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+        body = json.dumps(records, ensure_ascii=True, indent=2) + "\n"
+        temp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=self.storage_path.parent,
+                prefix=f".{self.storage_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temp_file:
+                temp_path = temp_file.name
+                temp_file.write(body)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+            os.replace(temp_path, self.storage_path)
+            temp_path = None
+        finally:
+            if temp_path is not None:
+                Path(temp_path).unlink(missing_ok=True)
 
     def _matches_scope(self, record: dict[str, Any], *, user_id=None, agent_id=None, run_id=None) -> bool:
         if user_id is not None and record.get("user_id") != user_id:
@@ -169,32 +215,6 @@ class LocalJsonProvider(BaseMemoryProvider):
             **({"raw": record["raw"]} if "raw" in record else {}),
         }
 
-    def _scope_inventory(self, *, kind: str | None = None, query: str | None = None) -> list[ScopeInventoryItem]:
-        kind_map = {"user": "user_id", "agent": "agent_id", "run": "run_id"}
-        selected_kinds = [kind] if kind else ["user", "agent", "run"]
-        query_l = query.lower() if query else None
-        buckets: dict[tuple[str, str], ScopeInventoryItem] = {}
-
-        for record in self._load_all():
-            for selected in selected_kinds:
-                field_name = kind_map[selected]
-                value = record.get(field_name)
-                if not isinstance(value, str) or not value.strip():
-                    continue
-                if query_l and query_l not in value.lower():
-                    continue
-                key = (selected, value)
-                item = buckets.setdefault(
-                    key,
-                    {"kind": selected, "value": value, "count": 0, "last_seen_at": None},
-                )
-                item["count"] += 1
-                timestamp = record.get("updated_at") or record.get("created_at")
-                if isinstance(timestamp, str) and timestamp and (item["last_seen_at"] is None or timestamp > item["last_seen_at"]):
-                    item["last_seen_at"] = timestamp
-
-        return sorted(buckets.values(), key=lambda item: (item["kind"], -item["count"], item["value"]))
-
     def doctor_rows(self) -> list[tuple[str, str]]:
         return [
             ("Storage path", str(self.storage_path)),
@@ -217,6 +237,47 @@ class LocalJsonProvider(BaseMemoryProvider):
             "default_limit": int(self.provider_config.get("default_limit", 100)),
         }
 
+    def _sync_scope_registry_upsert(self, *, operation: str, record: MemoryRecord) -> None:
+        memory_id = str(record.get("id", "")) or None
+        try:
+            scope_registry.upsert_record(self.provider_name, record, self.runtime_dir)
+        except Exception as exc:
+            try:
+                scope_registry.mark_sync_failed(
+                    self.provider_name,
+                    self.runtime_dir,
+                    operation=operation,
+                    memory_id=memory_id,
+                    error=exc,
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                scope_registry.clear_sync_failure(self.provider_name, self.runtime_dir)
+            except Exception:
+                pass
+
+    def _sync_scope_registry_delete(self, *, operation: str, memory_id: str) -> None:
+        try:
+            scope_registry.delete_record(self.provider_name, memory_id, self.runtime_dir)
+        except Exception as exc:
+            try:
+                scope_registry.mark_sync_failed(
+                    self.provider_name,
+                    self.runtime_dir,
+                    operation=operation,
+                    memory_id=memory_id,
+                    error=exc,
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                scope_registry.clear_sync_failure(self.provider_name, self.runtime_dir)
+            except Exception:
+                pass
+
     def add_memory(self, *, messages, user_id=None, agent_id=None, run_id=None, metadata=None, infer=True, memory_type=None) -> MemoryRecord:
         text = self._normalized_messages(messages)
         record = {
@@ -232,17 +293,22 @@ class LocalJsonProvider(BaseMemoryProvider):
             "updated_at": utc_now(),
         }
         with self._lock:
-            records = self._load_all()
-            records.append(record)
-            self._save_all(records)
-        return self._public_record(record)
+            with self._file_lock():
+                records = self._load_all_unlocked()
+                records.append(record)
+                self._save_all_unlocked(records)
+        public = self._public_record(record)
+        self._sync_scope_registry_upsert(operation="add", record=public)
+        return public
 
     def search_memory(self, *, query, user_id=None, agent_id=None, run_id=None, limit=10, filters=None, threshold=None, rerank=True) -> list[MemoryRecord]:
         if rerank:
             raise ProviderCapabilityError("Local JSON provider does not support rerank.")
         results: list[dict[str, Any]] = []
         with self._lock:
-            for record in self._load_all():
+            with self._file_lock():
+                records = self._load_all_unlocked()
+            for record in records:
                 if not self._matches_scope(record, user_id=user_id, agent_id=agent_id, run_id=run_id):
                     continue
                 if not self._matches_filters(record, filters):
@@ -260,9 +326,11 @@ class LocalJsonProvider(BaseMemoryProvider):
 
     def list_memories(self, *, user_id=None, agent_id=None, run_id=None, limit=100, filters=None) -> list[MemoryRecord]:
         with self._lock:
+            with self._file_lock():
+                raw_records = self._load_all_unlocked()
             records = [
                 self._public_record(record)
-                for record in self._load_all()
+                for record in raw_records
                 if self._matches_scope(record, user_id=user_id, agent_id=agent_id, run_id=run_id) and self._matches_filters(record, filters)
             ]
         records.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
@@ -270,42 +338,47 @@ class LocalJsonProvider(BaseMemoryProvider):
 
     def get_memory(self, memory_id):
         with self._lock:
-            for record in self._load_all():
+            with self._file_lock():
+                records = self._load_all_unlocked()
+            for record in records:
                 if record.get("id") == memory_id:
                     return self._public_record(record)
         raise MemoryNotFoundError(memory_id)
 
     def update_memory(self, *, memory_id, data, metadata=None) -> MemoryRecord:
         with self._lock:
-            records = self._load_all()
-            for record in records:
-                if record.get("id") == memory_id:
-                    record["memory"] = data
-                    if metadata is not None:
-                        record["metadata"] = metadata
-                    record["updated_at"] = utc_now()
-                    self._save_all(records)
-                    return self._public_record(record)
-        raise MemoryNotFoundError(memory_id)
+            with self._file_lock():
+                records = self._load_all_unlocked()
+                for record in records:
+                    if record.get("id") == memory_id:
+                        record["memory"] = data
+                        if metadata is not None:
+                            record["metadata"] = metadata
+                        record["updated_at"] = utc_now()
+                        self._save_all_unlocked(records)
+                        public = self._public_record(record)
+                        break
+                else:
+                    raise MemoryNotFoundError(memory_id)
+        self._sync_scope_registry_upsert(operation="update", record=public)
+        return public
 
     def delete_memory(self, *, memory_id) -> DeleteResult:
         with self._lock:
-            records = self._load_all()
-            remaining = [record for record in records if record.get("id") != memory_id]
-            if len(remaining) == len(records):
-                raise MemoryNotFoundError(memory_id)
-            self._save_all(remaining)
+            with self._file_lock():
+                records = self._load_all_unlocked()
+                remaining = [record for record in records if record.get("id") != memory_id]
+                if len(remaining) == len(records):
+                    raise MemoryNotFoundError(memory_id)
+                self._save_all_unlocked(remaining)
+        self._sync_scope_registry_delete(operation="delete", memory_id=str(memory_id))
         return {"id": memory_id, "deleted": True, "provider": self.provider_name}
 
     def list_scopes(self, *, limit: int = 200, kind: str | None = None, query: str | None = None) -> ScopeInventory:
-        if kind not in {None, "user", "agent", "run"}:
-            raise ProviderValidationError("Scope kind must be one of: user, agent, run.")
+        return scope_registry.list_inventory(self.provider_name, limit, kind, query, self.runtime_dir)
+
+    def iter_scope_registry_seed_records(self) -> list[MemoryRecord]:
         with self._lock:
-            all_items = self._scope_inventory(kind=None, query=query)
-            items = self._scope_inventory(kind=kind, query=query)
-        totals = {
-            "users": sum(1 for item in all_items if item["kind"] == "user"),
-            "agents": sum(1 for item in all_items if item["kind"] == "agent"),
-            "runs": sum(1 for item in all_items if item["kind"] == "run"),
-        }
-        return {"provider": self.provider_name, "items": items[:limit], "totals": totals}
+            with self._file_lock():
+                records = self._load_all_unlocked()
+        return [self._public_record(record) for record in records]

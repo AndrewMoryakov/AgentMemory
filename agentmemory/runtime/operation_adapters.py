@@ -33,7 +33,7 @@ def cli_operation_source(
             "agent_id": args.agent_id,
             "run_id": args.run_id,
             "metadata": parse_json_arg(args.metadata),
-            "infer": not args.no_infer,
+            "infer": bool(getattr(args, "infer", False)),
             "memory_type": args.memory_type,
         }
     if command == "search":

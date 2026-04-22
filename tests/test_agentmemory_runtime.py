@@ -1,11 +1,15 @@
 import json
 import importlib.util
+import os
+import io
 import tempfile
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
+from unittest import mock
 
 import agentmemory.runtime.config as agentmemory_runtime
+from agentmemory.runtime import scope_registry
 
 
 class AgentMemoryRuntimeTests(unittest.TestCase):
@@ -94,6 +98,8 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         provider_config = provider_type.default_provider_config(runtime_dir="C:\\runtime")
         args = SimpleNamespace(
             openrouter_api_key="sk-test",
+            openrouter_api_key_stdin=False,
+            openrouter_api_key_env=None,
             llm_model="custom-llm",
             embedding_model=None,
             embedding_dims=2048,
@@ -109,6 +115,38 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         self.assertEqual(provider_config["llm"]["config"]["model"], "custom-llm")
         self.assertEqual(provider_config["embedder"]["config"]["embedding_dims"], 2048)
         self.assertEqual(env_updates["OPENROUTER_API_KEY"], "sk-test")
+
+    def test_mem0_provider_reads_openrouter_key_from_stdin(self) -> None:
+        provider_type = agentmemory_runtime.provider_class("mem0")
+        args = SimpleNamespace(
+            openrouter_api_key=None,
+            openrouter_api_key_stdin=True,
+            openrouter_api_key_env=None,
+        )
+
+        with mock.patch("agentmemory.providers.mem0.sys.stdin", io.StringIO("sk-from-stdin\n")):
+            env_updates = provider_type.env_updates_from_args(args)
+
+        self.assertEqual(env_updates["OPENROUTER_API_KEY"], "sk-from-stdin")
+
+    def test_mem0_provider_reads_openrouter_key_from_named_env(self) -> None:
+        provider_type = agentmemory_runtime.provider_class("mem0")
+        args = SimpleNamespace(
+            openrouter_api_key=None,
+            openrouter_api_key_stdin=False,
+            openrouter_api_key_env="AGENTMEMORY_TEST_OPENROUTER_KEY",
+        )
+        original = os.environ.get("AGENTMEMORY_TEST_OPENROUTER_KEY")
+        try:
+            os.environ["AGENTMEMORY_TEST_OPENROUTER_KEY"] = "sk-from-env"
+            env_updates = provider_type.env_updates_from_args(args)
+        finally:
+            if original is None:
+                os.environ.pop("AGENTMEMORY_TEST_OPENROUTER_KEY", None)
+            else:
+                os.environ["AGENTMEMORY_TEST_OPENROUTER_KEY"] = original
+
+        self.assertEqual(env_updates["OPENROUTER_API_KEY"], "sk-from-env")
 
     def test_provider_registry_contains_second_test_provider(self) -> None:
         self.assertIn("localjson", agentmemory_runtime.provider_registry())
@@ -168,6 +206,44 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
 
         self.assertEqual(agentmemory_runtime.active_provider_runtime_policy(), agentmemory_runtime.runtime_info()["runtime_policy"])
 
+    def test_active_provider_runtime_policy_invalidates_when_config_file_changes_on_disk(self) -> None:
+        initial = agentmemory_runtime.default_runtime_config()
+        agentmemory_runtime.write_runtime_config(initial)
+
+        first_policy = agentmemory_runtime.active_provider_runtime_policy()
+
+        updated_document = agentmemory_runtime.default_runtime_document()
+        updated_document["profiles"]["default"]["runtime"]["provider"] = "localjson"
+        updated_document["profiles"]["default"]["providers"]["localjson"] = (
+            agentmemory_runtime.provider_class("localjson").default_provider_config(runtime_dir=self.temp_dir.name)
+        )
+        updated_document["profiles"]["default"]["providers"].pop("mem0", None)
+        agentmemory_runtime.CONFIG_PATH.write_text(json.dumps(updated_document, ensure_ascii=True), encoding="ascii")
+
+        second_policy = agentmemory_runtime.active_provider_runtime_policy()
+
+        self.assertEqual(first_policy["transport_mode"], "owner_process_proxy")
+        self.assertEqual(second_policy["transport_mode"], "direct")
+
+    def test_active_provider_capabilities_invalidates_when_config_file_changes_on_disk(self) -> None:
+        initial = agentmemory_runtime.default_runtime_config()
+        agentmemory_runtime.write_runtime_config(initial)
+
+        first_capabilities = agentmemory_runtime.active_provider_capabilities()
+
+        updated_document = agentmemory_runtime.default_runtime_document()
+        updated_document["profiles"]["default"]["runtime"]["provider"] = "localjson"
+        updated_document["profiles"]["default"]["providers"]["localjson"] = (
+            agentmemory_runtime.provider_class("localjson").default_provider_config(runtime_dir=self.temp_dir.name)
+        )
+        updated_document["profiles"]["default"]["providers"].pop("mem0", None)
+        agentmemory_runtime.CONFIG_PATH.write_text(json.dumps(updated_document, ensure_ascii=True), encoding="ascii")
+
+        second_capabilities = agentmemory_runtime.active_provider_capabilities()
+
+        self.assertTrue(first_capabilities["supports_owner_process_mode"])
+        self.assertFalse(second_capabilities["supports_owner_process_mode"])
+
     def test_memory_list_scopes_uses_active_provider(self) -> None:
         config = agentmemory_runtime.default_runtime_config()
         config["runtime"]["provider"] = "localjson"
@@ -181,6 +257,51 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
 
         self.assertEqual(payload["provider"], "localjson")
         self.assertEqual(payload["totals"]["users"], 1)
+
+    def test_runtime_info_includes_scope_registry_status(self) -> None:
+        config = agentmemory_runtime.default_runtime_config()
+        config["runtime"]["provider"] = "localjson"
+        config["runtime"]["runtime_dir"] = self.temp_dir.name
+        config["providers"]["localjson"] = agentmemory_runtime.provider_class("localjson").default_provider_config(
+            runtime_dir=self.temp_dir.name
+        )
+        agentmemory_runtime.write_runtime_config(config)
+
+        scope_registry.mark_sync_failed(
+            "localjson",
+            self.temp_dir.name,
+            operation="add",
+            memory_id="missing",
+            error=RuntimeError("boom"),
+        )
+        payload = agentmemory_runtime.runtime_info()
+
+        self.assertIn("scope_registry", payload)
+        self.assertEqual(payload["scope_registry"]["status"], "needs_rebuild")
+
+    def test_rebuild_scope_registry_clears_degraded_status_and_returns_status(self) -> None:
+        config = agentmemory_runtime.default_runtime_config()
+        config["runtime"]["provider"] = "localjson"
+        config["runtime"]["runtime_dir"] = self.temp_dir.name
+        config["providers"]["localjson"] = agentmemory_runtime.provider_class("localjson").default_provider_config(
+            runtime_dir=self.temp_dir.name
+        )
+        agentmemory_runtime.write_runtime_config(config)
+
+        agentmemory_runtime.memory_add(messages=[{"role": "user", "content": "hello"}], user_id="default")
+        scope_registry.mark_sync_failed(
+            "localjson",
+            self.temp_dir.name,
+            operation="add",
+            memory_id="missing",
+            error=RuntimeError("boom"),
+        )
+
+        payload = agentmemory_runtime.rebuild_scope_registry()
+
+        self.assertEqual(payload["provider"], "localjson")
+        self.assertEqual(payload["scope_registry"]["status"], "ok")
+        self.assertIsNotNone(payload["scope_registry"]["last_rebuild_at"])
 
     def test_profile_document_supports_create_and_switch(self) -> None:
         generic = agentmemory_runtime.default_runtime_config()

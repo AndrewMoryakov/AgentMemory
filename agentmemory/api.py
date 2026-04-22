@@ -2,6 +2,7 @@ import atexit
 import base64
 import hmac
 import json
+import mimetypes
 import os
 import signal
 import socket
@@ -44,7 +45,25 @@ from agentmemory.providers.base import (
     ProviderValidationError,
 )
 
-WEB_DIR = BASE_DIR / "web"
+WEB_DIR = BASE_DIR / "web" / "dist"
+SPA_ROUTES = {"/", "/me"}
+SPA_ROOT_ASSETS = {"/favicon.ico", "/vite.svg", "/manifest.webmanifest", "/robots.txt"}
+DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
+
+
+class RequestBodyTooLarge(ProviderValidationError):
+    pass
+
+
+def _max_body_bytes() -> int:
+    raw = os.environ.get("AGENTMEMORY_MAX_BODY_BYTES", "").strip()
+    if not raw:
+        return DEFAULT_MAX_BODY_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_BODY_BYTES
+    return value if value > 0 else DEFAULT_MAX_BODY_BYTES
 
 
 def _configured_token() -> str | None:
@@ -87,9 +106,31 @@ class Handler(BaseHTTPRequestHandler):
                 raise
 
     def _read_json(self):
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length) if length else b"{}"
+        raw = self._read_request_body()
         return json.loads(raw.decode("utf-8")) if raw else {}
+
+    def _read_request_body(self) -> bytes:
+        max_body_bytes = _max_body_bytes()
+        length_header = self.headers.get("Content-Length")
+        if length_header is not None:
+            try:
+                declared_length = int(length_header)
+            except ValueError as exc:
+                raise ProviderValidationError("Invalid Content-Length header.") from exc
+            if declared_length < 0:
+                raise ProviderValidationError("Invalid Content-Length header.")
+            if declared_length > max_body_bytes:
+                raise RequestBodyTooLarge(
+                    f"Request body exceeds {max_body_bytes} bytes. Set AGENTMEMORY_MAX_BODY_BYTES to override."
+                )
+            return self.rfile.read(declared_length) if declared_length else b"{}"
+
+        raw = self.rfile.read(max_body_bytes + 1)
+        if len(raw) > max_body_bytes:
+            raise RequestBodyTooLarge(
+                f"Request body exceeds {max_body_bytes} bytes. Set AGENTMEMORY_MAX_BODY_BYTES to override."
+            )
+        return raw or b"{}"
 
     def _send_error_payload(self, status: int, exc: Exception) -> None:
         if isinstance(exc, ProviderError):
@@ -233,8 +274,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         expected_client_id, _ = creds
 
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length).decode("utf-8") if length else ""
+        raw = self._read_request_body().decode("utf-8")
         form = parse_qs(raw, keep_blank_values=True)
 
         def _f(name: str, default: str = "") -> str:
@@ -284,18 +324,33 @@ class Handler(BaseHTTPRequestHandler):
             payload["scope"] = entry["scope"]
         self._send(200, payload)
 
-    def _serve_web_file(self, relative_path: str, content_type: str) -> bool:
+    def _serve_web_file(self, relative_path: str, content_type: str | None = None) -> bool:
         path = (WEB_DIR / relative_path).resolve()
         try:
             path.relative_to(WEB_DIR.resolve())
         except ValueError:
             self._send(404, {"error": "Not found"})
             return True
-        if not path.exists():
+        if not path.exists() or not path.is_file():
             self._send(404, {"error": "Not found"})
             return True
+        if content_type is None:
+            guessed, _ = mimetypes.guess_type(str(path))
+            content_type = guessed or "application/octet-stream"
         self._send_bytes(200, path.read_bytes(), content_type)
         return True
+
+    def _serve_spa_shell(self) -> bool:
+        index = WEB_DIR / "index.html"
+        if not index.exists():
+            self._send(
+                503,
+                {
+                    "error": "UI bundle not built. Run 'npm install && npm run build' in web/.",
+                },
+            )
+            return True
+        return self._serve_web_file("index.html", "text/html; charset=utf-8")
 
     def log_message(self, format, *args):
         return
@@ -304,23 +359,23 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         try:
-            if parsed.path in {"/", "/ui", "/ui/"}:
+            if parsed.path in SPA_ROUTES:
                 if _ui_disabled():
                     self._send(404, {"error": "UI disabled"})
                     return
-                self._serve_web_file("index.html", "text/html; charset=utf-8")
+                self._serve_spa_shell()
                 return
-            if parsed.path == "/ui/app.js":
+            if parsed.path.startswith("/assets/"):
                 if _ui_disabled():
                     self._send(404, {"error": "UI disabled"})
                     return
-                self._serve_web_file("app.js", "application/javascript; charset=utf-8")
+                self._serve_web_file(parsed.path.lstrip("/"))
                 return
-            if parsed.path == "/ui/styles.css":
+            if parsed.path in SPA_ROOT_ASSETS:
                 if _ui_disabled():
                     self._send(404, {"error": "UI disabled"})
                     return
-                self._serve_web_file("styles.css", "text/css; charset=utf-8")
+                self._serve_web_file(parsed.path.lstrip("/"))
                 return
             if parsed.path == "/health":
                 if self._is_authorized():
@@ -389,6 +444,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(404, {"error": "Not found"})
         except ProviderError as exc:
+            if isinstance(exc, RequestBodyTooLarge):
+                self._send_error_payload(413, exc)
+                return
             self._send_error_payload(provider_error_status(exc), exc)
         except json.JSONDecodeError as exc:
             self._send_error_payload(400, ProviderValidationError(str(exc)))
@@ -427,6 +485,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(404, {"error": "Not found"})
         except ProviderError as exc:
+            if isinstance(exc, RequestBodyTooLarge):
+                self._send_error_payload(413, exc)
+                return
             self._send_error_payload(provider_error_status(exc), exc)
         except KeyError as exc:
             self._send_error_payload(400, ProviderValidationError(f"Missing field: {exc.args[0]}"))
@@ -436,6 +497,9 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_mcp_post(self) -> None:
         try:
             incoming = self._read_json()
+        except RequestBodyTooLarge as exc:
+            self._send(413, {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": str(exc)}})
+            return
         except json.JSONDecodeError as exc:
             self._send(400, {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {exc}"}})
             return
@@ -483,6 +547,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(404, {"error": "Not found"})
         except ProviderError as exc:
+            if isinstance(exc, RequestBodyTooLarge):
+                self._send_error_payload(413, exc)
+                return
             self._send_error_payload(provider_error_status(exc), exc)
         except KeyError as exc:
             self._send_error_payload(404, MemoryNotFoundError(f"Missing memory: {exc.args[0]}"))

@@ -1,4 +1,5 @@
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -122,8 +123,9 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
             sys.stderr = original_stderr
 
         self.assertEqual(rc, 2)
-        self.assertIn("Invalid JSON", stderr_buffer.getvalue())
-        self.assertNotIn("JSONDecodeError", stderr_buffer.getvalue())
+        payload = json.loads(stderr_buffer.getvalue())
+        self.assertEqual(payload["error_type"], "ProviderValidationError")
+        self.assertIn("Invalid JSON", payload["message"])
 
     def test_cli_returns_exit_code_2_for_invalid_filters(self) -> None:
         original_argv = sys.argv
@@ -142,8 +144,9 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
             sys.stderr = original_stderr
 
         self.assertEqual(rc, 2)
-        self.assertIn("Invalid JSON", stderr_buffer.getvalue())
-        self.assertNotIn("JSONDecodeError", stderr_buffer.getvalue())
+        payload = json.loads(stderr_buffer.getvalue())
+        self.assertEqual(payload["error_type"], "ProviderValidationError")
+        self.assertIn("Invalid JSON", payload["message"])
 
     def test_cli_search_rejects_missing_required_scope_before_provider_call(self) -> None:
         original_argv = sys.argv
@@ -184,7 +187,9 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
             agentmemory_operations.OPERATIONS["search"] = original_search_spec
 
         self.assertEqual(rc, 2)
-        self.assertIn("requires user_id, agent_id, or run_id for search", stderr_buffer.getvalue())
+        payload = json.loads(stderr_buffer.getvalue())
+        self.assertEqual(payload["error_type"], "ProviderValidationError")
+        self.assertIn("requires user_id, agent_id, or run_id for search", payload["message"])
 
     def test_cli_search_coerces_unsupported_rerank_before_provider_call(self) -> None:
         # Per DEFECT-01 the capability gap no longer raises; the dispatcher

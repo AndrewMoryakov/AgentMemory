@@ -4,7 +4,7 @@ import sys
 
 from agentmemory.runtime.operation_adapters import cli_operation_source
 from agentmemory.runtime.operations import OPERATIONS
-from agentmemory.providers.base import ProviderError, ProviderValidationError
+from agentmemory.providers.base import ProviderError, ProviderValidationError, provider_error_payload
 
 
 def print_json(data):
@@ -37,7 +37,8 @@ def main() -> int:
     add_parser.add_argument("--run-id")
     add_parser.add_argument("--message", action="append", required=True, help="User message text. Repeat to add multiple user messages.")
     add_parser.add_argument("--metadata")
-    add_parser.add_argument("--no-infer", action="store_true")
+    add_parser.add_argument("--infer", action="store_true", help="Let the provider rewrite/extract facts before storing.")
+    add_parser.add_argument("--no-infer", action="store_true", help=argparse.SUPPRESS)
     add_parser.add_argument("--memory-type")
 
     search_parser = subparsers.add_parser("search")
@@ -100,7 +101,7 @@ def main() -> int:
             print_json(OPERATIONS["delete"].execute(cli_operation_source("delete", args, parse_json_arg=parse_metadata)))
             return 0
     except ProviderError as exc:
-        print(str(exc), file=sys.stderr)
+        print(json.dumps(provider_error_payload(exc), ensure_ascii=True), file=sys.stderr)
         return 2
 
     return 1

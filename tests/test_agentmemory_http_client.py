@@ -1,5 +1,10 @@
+import json
 import os
+import multiprocessing
+import tempfile
+import time
 import unittest
+from pathlib import Path
 
 import agentmemory.runtime.http_client as agentmemory_http_client
 from agentmemory.providers.base import (
@@ -9,6 +14,40 @@ from agentmemory.providers.base import (
     ProviderUnavailableError,
     ProviderValidationError,
 )
+
+
+def _concurrent_ensure_api_running_worker(shared_dir: str) -> None:
+    import agentmemory.runtime.http_client as http_client
+
+    base = Path(shared_dir)
+    lock_path = base / "agentmemory-api.start.lock"
+    launch_count_path = base / "launch-count.json"
+    healthy_path = base / "healthy.txt"
+    real_sleep = time.sleep
+
+    http_client.API_START_LOCK_FILE = lock_path  # type: ignore[assignment]
+    http_client.current_api_host = lambda: "127.0.0.1"  # type: ignore[assignment]
+    http_client.current_api_port = lambda: 8765  # type: ignore[assignment]
+    http_client.clear_caches = lambda: None  # type: ignore[assignment]
+    http_client.time.sleep = lambda seconds: real_sleep(min(seconds, 0.01))  # type: ignore[assignment]
+
+    def fake_api_is_healthy() -> bool:
+        return healthy_path.exists()
+
+    def fake_subprocess_run(*_args, **_kwargs):
+        if launch_count_path.exists():
+            payload = json.loads(launch_count_path.read_text(encoding="utf-8"))
+        else:
+            payload = {"count": 0}
+        payload["count"] += 1
+        launch_count_path.write_text(json.dumps(payload), encoding="utf-8")
+        real_sleep(0.15)
+        healthy_path.write_text("ok", encoding="utf-8")
+        return None
+
+    http_client.api_is_healthy = fake_api_is_healthy  # type: ignore[assignment]
+    http_client.subprocess.run = fake_subprocess_run  # type: ignore[assignment]
+    http_client.ensure_api_running()
 
 
 class AgentMemoryHttpClientTests(unittest.TestCase):
@@ -103,13 +142,68 @@ class AgentMemoryHttpClientTests(unittest.TestCase):
         self.assertIn("kind=user", str(captured["path"]))
         self.assertIn("query=def", str(captured["path"]))
 
+    def test_proxy_methods_send_configured_api_token(self) -> None:
+        original_ensure_api_running = agentmemory_http_client.ensure_api_running
+        original_urlopen = agentmemory_http_client.urlopen
+        original_token = os.environ.get("AGENTMEMORY_API_TOKEN")
+        captured_authorization_headers: list[str | None] = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b"{}"
+
+        try:
+            os.environ["AGENTMEMORY_API_TOKEN"] = "internal-token"
+            agentmemory_http_client.ensure_api_running = lambda: None  # type: ignore[assignment]
+
+            def fake_urlopen(request, timeout=30):
+                captured_authorization_headers.append(request.get_header("Authorization"))
+                return FakeResponse()
+
+            agentmemory_http_client.urlopen = fake_urlopen  # type: ignore[assignment]
+
+            proxy_calls = [
+                lambda: agentmemory_http_client.proxy_health(),
+                lambda: agentmemory_http_client.proxy_add(messages="hello", user_id="u1", infer=False),
+                lambda: agentmemory_http_client.proxy_search(query="hello", user_id="u1", rerank=True),
+                lambda: agentmemory_http_client.proxy_list(user_id="u1"),
+                lambda: agentmemory_http_client.proxy_get("mem-1"),
+                lambda: agentmemory_http_client.proxy_update(memory_id="mem-1", data="updated"),
+                lambda: agentmemory_http_client.proxy_delete(memory_id="mem-1"),
+                lambda: agentmemory_http_client.proxy_list_scopes(limit=10),
+            ]
+            for call in proxy_calls:
+                call()
+        finally:
+            agentmemory_http_client.ensure_api_running = original_ensure_api_running  # type: ignore[assignment]
+            agentmemory_http_client.urlopen = original_urlopen  # type: ignore[assignment]
+            if original_token is None:
+                os.environ.pop("AGENTMEMORY_API_TOKEN", None)
+            else:
+                os.environ["AGENTMEMORY_API_TOKEN"] = original_token
+
+        self.assertEqual(len(captured_authorization_headers), 8)
+        self.assertEqual(captured_authorization_headers, ["Bearer internal-token"] * 8)
+
+    def test_proxy_add_and_search_require_explicit_capability_sensitive_flags(self) -> None:
+        with self.assertRaises(TypeError):
+            agentmemory_http_client.proxy_add(messages="hello", user_id="u1")
+        with self.assertRaises(TypeError):
+            agentmemory_http_client.proxy_search(query="hello", user_id="u1")
+
     def test_ensure_api_running_clears_runtime_cache_after_launcher_start(self) -> None:
         original_api_is_healthy = agentmemory_http_client.api_is_healthy
         original_subprocess_run = agentmemory_http_client.subprocess.run
         original_clear_caches = agentmemory_http_client.clear_caches
         original_time_sleep = agentmemory_http_client.time.sleep
         calls: list[str] = []
-        health_checks = iter([False, True])
+        health_checks = iter([False, False, True])
         try:
             agentmemory_http_client.api_is_healthy = lambda: next(health_checks)  # type: ignore[assignment]
             agentmemory_http_client.subprocess.run = lambda *args, **kwargs: None  # type: ignore[assignment]
@@ -124,6 +218,24 @@ class AgentMemoryHttpClientTests(unittest.TestCase):
             agentmemory_http_client.time.sleep = original_time_sleep  # type: ignore[assignment]
 
         self.assertEqual(calls, ["cleared"])
+
+    def test_ensure_api_running_serializes_concurrent_cold_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            launch_count_path = base / "launch-count.json"
+            processes = [
+                multiprocessing.Process(target=_concurrent_ensure_api_running_worker, args=(tmp,))
+                for _ in range(2)
+            ]
+
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(timeout=10)
+
+            self.assertTrue(all(process.exitcode == 0 for process in processes))
+            payload = json.loads(launch_count_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["count"], 1)
 
     def test_http_error_type_maps_to_typed_error(self) -> None:
         original_urlopen = agentmemory_http_client.urlopen

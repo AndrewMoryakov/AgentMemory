@@ -164,6 +164,27 @@ class LifecycleTTLTests(unittest.TestCase):
             result = agentmemory_operations.OPERATIONS["list"].execute({"user_id": "u1"})
         self.assertEqual([r["id"] for r in result], ["a"])
 
+    def test_list_refills_after_filtering_expired_records(self) -> None:
+        now = lifecycle_module.utc_now()
+        fresh_a = {"id": "a", "memory": "fresh-a", "metadata": {"expires_at": (now + timedelta(seconds=60)).isoformat()}}
+        stale = {"id": "b", "memory": "stale", "metadata": {"expires_at": (now - timedelta(seconds=1)).isoformat()}}
+        fresh_c = {"id": "c", "memory": "fresh-c", "metadata": {"expires_at": (now + timedelta(seconds=120)).isoformat()}}
+        requested_limits: list[int] = []
+
+        def fake_memory_list(**kwargs):
+            requested_limits.append(kwargs["limit"])
+            full = [fresh_a, stale, fresh_c]
+            return full[: kwargs["limit"]]
+
+        with mock.patch.object(agentmemory_operations, "memory_list", fake_memory_list), \
+             mock.patch.object(agentmemory_operations, "should_proxy_to_api", lambda: False), \
+             mock.patch.object(agentmemory_operations, "active_provider_name", lambda: "localjson"), \
+             mock.patch.object(agentmemory_operations, "active_provider_capabilities", lambda: _caps(requires_scope_for_list=False, supports_scopeless_list=True)):
+            result = agentmemory_operations.OPERATIONS["list"].execute({"limit": 2})
+
+        self.assertEqual(requested_limits, [2, 4])
+        self.assertEqual([r["id"] for r in result], ["a", "c"])
+
     def test_get_on_expired_raises_memory_not_found(self) -> None:
         from agentmemory.providers.base import MemoryNotFoundError
         now = lifecycle_module.utc_now()
@@ -192,6 +213,27 @@ class LifecycleTTLTests(unittest.TestCase):
         self.assertIn("expires_at", captured["metadata"])
         self.assertNotIn("ttl_seconds", captured["metadata"])
         self.assertEqual(captured["metadata"]["marker"], "x")
+
+    def test_search_refills_after_filtering_expired_records(self) -> None:
+        now = lifecycle_module.utc_now()
+        fresh_a = {"id": "a", "memory": "fresh-a", "score": 0.99, "metadata": {"expires_at": (now + timedelta(seconds=60)).isoformat()}}
+        stale = {"id": "b", "memory": "stale", "score": 0.98, "metadata": {"expires_at": (now - timedelta(seconds=1)).isoformat()}}
+        fresh_c = {"id": "c", "memory": "fresh-c", "score": 0.97, "metadata": {"expires_at": (now + timedelta(seconds=120)).isoformat()}}
+        requested_limits: list[int] = []
+
+        def fake_memory_search(**kwargs):
+            requested_limits.append(kwargs["limit"])
+            full = [fresh_a, stale, fresh_c]
+            return full[: kwargs["limit"]]
+
+        with mock.patch.object(agentmemory_operations, "memory_search", fake_memory_search), \
+             mock.patch.object(agentmemory_operations, "should_proxy_to_api", lambda: False), \
+             mock.patch.object(agentmemory_operations, "active_provider_name", lambda: "mem0"), \
+             mock.patch.object(agentmemory_operations, "active_provider_capabilities", lambda: _caps()):
+            result = agentmemory_operations.OPERATIONS["search"].execute({"query": "fresh", "user_id": "u1", "limit": 2})
+
+        self.assertEqual(requested_limits, [2, 4])
+        self.assertEqual([r["id"] for r in result], ["a", "c"])
 
 
 class LifecycleDedupTests(unittest.TestCase):

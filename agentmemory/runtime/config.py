@@ -22,6 +22,8 @@ from agentmemory.providers.base import (
     ProviderContract,
     ProviderRuntimePolicy,
 )
+from agentmemory.runtime.atomic_io import atomic_write_json, atomic_write_text
+from agentmemory.runtime import scope_registry
 
 
 CONFIG_VERSION = 2
@@ -62,6 +64,29 @@ RUNTIME_DIR = BASE_DIR / "data"
 API_PID_FILE = BASE_DIR / "data" / "agentmemory-api.pid"
 API_STATE_FILE = BASE_DIR / "data" / "agentmemory-api.json"
 PLACEHOLDER_KEYS = {"paste-your-openrouter-key-here", "YOUR_OPENROUTER_API_KEY"}
+_CONFIG_CACHE_MARKER: tuple[str, bool, int | None, int | None] | None = None
+
+
+def _current_config_cache_marker() -> tuple[str, bool, int | None, int | None]:
+    path = CONFIG_PATH
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return (str(path), False, None, None)
+    return (str(path), True, stat.st_mtime_ns, stat.st_size)
+
+
+def _refresh_runtime_config_caches() -> None:
+    global _CONFIG_CACHE_MARKER
+    current = _current_config_cache_marker()
+    if _CONFIG_CACHE_MARKER is None:
+        _CONFIG_CACHE_MARKER = current
+        return
+    if current != _CONFIG_CACHE_MARKER:
+        _load_runtime_config_document_with_source_cached.cache_clear()
+        _load_runtime_config_with_source_cached.cache_clear()
+        _get_provider_cached.cache_clear()
+        _CONFIG_CACHE_MARKER = current
 
 
 def load_dotenv(env_path: Path = ENV_PATH, *, override: bool = False) -> dict[str, str]:
@@ -197,7 +222,7 @@ def effective_config_from_document(document: dict[str, Any], *, profile_name: st
 
 
 def write_runtime_config_document(document: dict[str, Any]) -> None:
-    CONFIG_PATH.write_text(json.dumps(normalize_runtime_document(document), ensure_ascii=True, indent=2) + "\n", encoding="ascii")
+    atomic_write_json(CONFIG_PATH, normalize_runtime_document(document), encoding="ascii")
     clear_caches()
 
 
@@ -217,11 +242,16 @@ def write_runtime_config(config: dict[str, Any]) -> None:
 
 
 @lru_cache(maxsize=1)
-def load_runtime_config_document_with_source() -> tuple[dict[str, Any], str, Path]:
+def _load_runtime_config_document_with_source_cached() -> tuple[dict[str, Any], str, Path]:
     if CONFIG_PATH.exists():
         raw = json.loads(CONFIG_PATH.read_text(encoding="ascii"))
         return normalize_runtime_document(raw), "generic", CONFIG_PATH
     return default_runtime_document(), "default", CONFIG_PATH
+
+
+def load_runtime_config_document_with_source() -> tuple[dict[str, Any], str, Path]:
+    _refresh_runtime_config_caches()
+    return _load_runtime_config_document_with_source_cached()
 
 
 def load_runtime_config_document() -> dict[str, Any]:
@@ -229,9 +259,14 @@ def load_runtime_config_document() -> dict[str, Any]:
 
 
 @lru_cache(maxsize=1)
-def load_runtime_config_with_source() -> tuple[dict[str, Any], str, Path]:
-    document, source, path = load_runtime_config_document_with_source()
+def _load_runtime_config_with_source_cached() -> tuple[dict[str, Any], str, Path]:
+    document, source, path = _load_runtime_config_document_with_source_cached()
     return effective_config_from_document(document), source, path
+
+
+def load_runtime_config_with_source() -> tuple[dict[str, Any], str, Path]:
+    _refresh_runtime_config_caches()
+    return _load_runtime_config_with_source_cached()
 
 
 def load_runtime_config() -> dict[str, Any]:
@@ -249,17 +284,24 @@ def current_api_port() -> int:
 
 
 @lru_cache(maxsize=1)
-def get_provider() -> BaseMemoryProvider:
-    config, _source, _path = load_runtime_config_with_source()
+def _get_provider_cached() -> BaseMemoryProvider:
+    config, _source, _path = _load_runtime_config_with_source_cached()
     provider_name = config["runtime"]["provider"]
     provider_type = provider_class(provider_name)
     return provider_type(runtime_config=config["runtime"], provider_config=config["providers"][provider_name])
 
 
+def get_provider() -> BaseMemoryProvider:
+    _refresh_runtime_config_caches()
+    return _get_provider_cached()
+
+
 def clear_caches() -> None:
-    load_runtime_config_document_with_source.cache_clear()
-    load_runtime_config_with_source.cache_clear()
-    get_provider.cache_clear()
+    global _CONFIG_CACHE_MARKER
+    _load_runtime_config_document_with_source_cached.cache_clear()
+    _load_runtime_config_with_source_cached.cache_clear()
+    _get_provider_cached.cache_clear()
+    _CONFIG_CACHE_MARKER = None
 
 
 def ensure_default_runtime_config() -> dict[str, Any]:
@@ -280,7 +322,7 @@ def write_env_values(values: dict[str, str]) -> None:
     ]
     for key in sorted(current):
         lines.append(f"{key}={current[key]}")
-    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(ENV_PATH, "\n".join(lines) + "\n", encoding="utf-8")
     load_dotenv(override=True)
     clear_caches()
 
@@ -453,7 +495,7 @@ def write_api_state(*, pid: int, host: str, port: int) -> None:
         "profile": current_profile_name(),
         "provider": active_provider_name(),
     }
-    API_STATE_FILE.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="ascii")
+    atomic_write_json(API_STATE_FILE, payload, encoding="ascii")
 
 
 def remove_api_state() -> None:
@@ -562,6 +604,7 @@ def runtime_info() -> dict[str, Any]:
         "capabilities": active_provider_capabilities(),
         "runtime_policy": active_provider_runtime_policy(),
         "provider_contract": active_provider_contract(),
+        "scope_registry": scope_registry.scope_registry_status(active_provider_name(), provider.runtime_dir),
         "config_source": source,
         **provider.runtime_info(),
     }
@@ -620,3 +663,18 @@ def memory_delete(*, memory_id):
 
 def memory_list_scopes(*, limit: int = 200, kind: str | None = None, query: str | None = None):
     return get_provider().list_scopes(limit=limit, kind=kind, query=query)
+
+
+def rebuild_scope_registry() -> dict[str, Any]:
+    provider = get_provider()
+    summary = scope_registry.replace_provider_records(
+        active_provider_name(),
+        provider.iter_scope_registry_seed_records(),
+        provider.runtime_dir,
+    )
+    scope_registry.clear_sync_failure(active_provider_name(), provider.runtime_dir, rebuilt=True)
+    return {
+        "provider": active_provider_name(),
+        **summary,
+        "scope_registry": scope_registry.scope_registry_status(active_provider_name(), provider.runtime_dir),
+    }

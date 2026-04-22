@@ -12,6 +12,7 @@ from agentmemory.providers.base import (
     ProviderScopeRequiredError,
     ProviderUnavailableError,
     ProviderValidationError,
+    provider_error_payload as base_provider_error_payload,
 )
 
 
@@ -163,7 +164,7 @@ def provider_error_status(exc: ProviderError) -> int:
 
 
 def provider_error_payload(exc: ProviderError) -> dict[str, Any]:
-    return {"error_type": exc.__class__.__name__, "message": str(exc)}
+    return base_provider_error_payload(exc)
 
 
 def error_class_for_type(error_type: str, *, status_code: int) -> type[ProviderError]:

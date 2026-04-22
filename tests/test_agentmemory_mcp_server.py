@@ -44,6 +44,71 @@ class AgentMemoryMcpServerTests(unittest.TestCase):
         self.assertIsNotNone(response)
         self.assertEqual(response["error"]["code"], -32601)
 
+    def test_bad_tool_arguments_return_validation_error_not_unknown_tool(self) -> None:
+        response = agentmemory_mcp_server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 31,
+                "method": "tools/call",
+                "params": {"name": "memory_add", "arguments": {"messages": "wrong field"}},
+            }
+        )
+
+        self.assertIsNotNone(response)
+        self.assertNotIn("error", response)
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error_type"], "ProviderValidationError")
+        self.assertEqual(result["structuredContent"]["message"], "Missing required argument: text")
+
+    def test_tool_arguments_reject_unexpected_fields(self) -> None:
+        response = agentmemory_mcp_server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 32,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": {"query": "demo", "unexpected": True}},
+            }
+        )
+
+        self.assertIsNotNone(response)
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error_type"], "ProviderValidationError")
+        self.assertEqual(result["structuredContent"]["message"], "Unexpected argument: unexpected")
+
+    def test_tool_arguments_validate_types(self) -> None:
+        response = agentmemory_mcp_server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 33,
+                "method": "tools/call",
+                "params": {"name": "memory_list_scopes", "arguments": {"limit": "25"}},
+            }
+        )
+
+        self.assertIsNotNone(response)
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error_type"], "ProviderValidationError")
+        self.assertEqual(result["structuredContent"]["message"], "Argument 'limit' must be integer.")
+
+    def test_tool_arguments_must_be_object(self) -> None:
+        response = agentmemory_mcp_server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 34,
+                "method": "tools/call",
+                "params": {"name": "memory_health", "arguments": []},
+            }
+        )
+
+        self.assertIsNotNone(response)
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error_type"], "ProviderValidationError")
+        self.assertEqual(result["structuredContent"]["message"], "MCP tool arguments must be an object.")
+
     def test_provider_errors_return_structured_error_payload(self) -> None:
         original_spec = agentmemory_mcp_server.OPERATIONS_BY_MCP_NAME["memory_get"]
         try:

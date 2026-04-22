@@ -32,6 +32,13 @@ class ProviderValidationError(ProviderError):
     pass
 
 
+def provider_error_payload(exc: ProviderError) -> dict[str, Any]:
+    return {
+        "error_type": exc.__class__.__name__,
+        "message": str(exc),
+    }
+
+
 class ProviderCapabilities(TypedDict):
     supports_semantic_search: bool
     supports_text_search: bool
@@ -110,6 +117,10 @@ class BaseMemoryProvider(ABC):
     def __init__(self, *, runtime_config: dict[str, Any], provider_config: dict[str, Any]) -> None:
         self.runtime_config = runtime_config
         self.provider_config = provider_config
+
+    @property
+    def runtime_dir(self) -> str:
+        return str(self.runtime_config.get("runtime_dir", ""))
 
     @classmethod
     def provider_metadata(cls) -> dict[str, Any]:
@@ -220,3 +231,6 @@ class BaseMemoryProvider(ABC):
     @abstractmethod
     def list_scopes(self, *, limit: int = 200, kind: str | None = None, query: str | None = None) -> ScopeInventory:
         raise NotImplementedError
+
+    def iter_scope_registry_seed_records(self) -> list[MemoryRecord]:
+        raise ProviderCapabilityError(f"{self.display_name} does not support scope-registry rebuild.")

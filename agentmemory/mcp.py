@@ -6,7 +6,7 @@ from typing import Any
 from agentmemory.runtime.operation_adapters import mcp_operation_source
 from agentmemory.runtime.operations import OPERATIONS_BY_MCP_NAME, mcp_tools
 from agentmemory.runtime.transport import mcp_result, provider_error_payload
-from agentmemory.providers.base import ProviderError
+from agentmemory.providers.base import ProviderError, ProviderValidationError
 
 SERVER_INFO = {
     "name": "agentmemory",
@@ -42,11 +42,60 @@ def handle_initialize(request_id: Any, params: dict[str, Any]) -> dict[str, Any]
     return success(request_id, result)
 
 
-def handle_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    spec = OPERATIONS_BY_MCP_NAME.get(name)
-    if spec is None:
-        raise KeyError(name)
-    return mcp_result(spec.execute(mcp_operation_source(name, arguments)))
+def _schema_type_matches(value: Any, expected_type: str) -> bool:
+    if expected_type == "object":
+        return isinstance(value, dict)
+    if expected_type == "array":
+        return isinstance(value, list)
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected_type == "boolean":
+        return isinstance(value, bool)
+    if expected_type == "null":
+        return value is None
+    return True
+
+
+def validate_arguments(schema: dict[str, Any], arguments: Any) -> dict[str, Any]:
+    if not isinstance(arguments, dict):
+        raise ProviderValidationError("MCP tool arguments must be an object.")
+
+    if schema.get("type") == "object":
+        properties = schema.get("properties") or {}
+        required = schema.get("required") or []
+        for field in required:
+            if field not in arguments:
+                raise ProviderValidationError(f"Missing required argument: {field}")
+
+        if schema.get("additionalProperties") is False:
+            extra = sorted(key for key in arguments if key not in properties)
+            if extra:
+                raise ProviderValidationError(f"Unexpected argument: {extra[0]}")
+
+        for field, value in arguments.items():
+            field_schema = properties.get(field)
+            if not isinstance(field_schema, dict):
+                continue
+            expected_type = field_schema.get("type")
+            if isinstance(expected_type, str) and not _schema_type_matches(value, expected_type):
+                raise ProviderValidationError(f"Argument '{field}' must be {expected_type}.")
+            allowed_values = field_schema.get("enum")
+            if isinstance(allowed_values, list) and value not in allowed_values:
+                raise ProviderValidationError(f"Argument '{field}' must be one of: {', '.join(map(str, allowed_values))}.")
+            minimum = field_schema.get("minimum")
+            if isinstance(minimum, (int, float)) and isinstance(value, (int, float)) and not isinstance(value, bool) and value < minimum:
+                raise ProviderValidationError(f"Argument '{field}' must be >= {minimum}.")
+
+    return arguments
+
+
+def handle_call(spec: Any, name: str, arguments: Any) -> dict[str, Any]:
+    validated_arguments = validate_arguments(spec.input_schema, arguments)
+    return mcp_result(spec.execute(mcp_operation_source(name, validated_arguments)))
 
 
 def error_result(exc: ProviderError) -> dict[str, Any]:
@@ -68,13 +117,16 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
         return success(request_id, {"tools": TOOLS})
     if method == "tools/call":
         name = params.get("name")
-        arguments = params.get("arguments") or {}
+        arguments = params.get("arguments", {})
+        if arguments is None:
+            arguments = {}
+        spec = OPERATIONS_BY_MCP_NAME.get(name)
+        if spec is None:
+            return error(request_id, -32601, f"Unknown tool: {name}")
         try:
-            return success(request_id, handle_call(name, arguments))
+            return success(request_id, handle_call(spec, name, arguments))
         except ProviderError as exc:
             return success(request_id, error_result(exc))
-        except KeyError:
-            return error(request_id, -32601, f"Unknown tool: {name}")
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
             return success(request_id, mcp_result({"error_type": "InternalError", "message": str(exc)}, is_error=True))

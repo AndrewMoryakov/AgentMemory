@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from functools import lru_cache
 import importlib.metadata
 import pickle
@@ -31,8 +32,8 @@ from agentmemory.providers.base import (
     ProviderUnavailableError,
     ProviderValidationError,
     ScopeInventory,
-    ScopeInventoryItem,
 )
+from agentmemory.runtime import scope_registry
 
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -158,7 +159,18 @@ class Mem0Provider(BaseMemoryProvider):
 
     @classmethod
     def configure_parser(cls, parser) -> None:
-        parser.add_argument("--openrouter-api-key", help="Store OPENROUTER_API_KEY in .env")
+        key_source = parser.add_mutually_exclusive_group()
+        key_source.add_argument("--openrouter-api-key", help="Store OPENROUTER_API_KEY in .env")
+        key_source.add_argument(
+            "--openrouter-api-key-stdin",
+            action="store_true",
+            help="Read OPENROUTER_API_KEY from stdin and store it in .env",
+        )
+        key_source.add_argument(
+            "--openrouter-api-key-env",
+            metavar="NAME",
+            help="Read OPENROUTER_API_KEY from the named environment variable and store it in .env",
+        )
         parser.add_argument("--llm-model")
         parser.add_argument("--embedding-model")
         parser.add_argument("--embedding-dims", type=int)
@@ -171,6 +183,17 @@ class Mem0Provider(BaseMemoryProvider):
         updates: dict[str, str] = {}
         if getattr(args, "openrouter_api_key", None):
             updates["OPENROUTER_API_KEY"] = args.openrouter_api_key
+        if getattr(args, "openrouter_api_key_stdin", False):
+            api_key = sys.stdin.read().strip()
+            if not api_key:
+                raise ProviderConfigurationError("--openrouter-api-key-stdin received an empty key")
+            updates["OPENROUTER_API_KEY"] = api_key
+        env_name = getattr(args, "openrouter_api_key_env", None)
+        if env_name:
+            api_key = os.environ.get(env_name, "").strip()
+            if not api_key:
+                raise ProviderConfigurationError(f"--openrouter-api-key-env {env_name} is not set or empty")
+            updates["OPENROUTER_API_KEY"] = api_key
         return updates
 
     @classmethod
@@ -257,11 +280,15 @@ class Mem0Provider(BaseMemoryProvider):
     @lru_cache(maxsize=1)
     def _load_memory(self) -> Memory:
         api_key = self._get_openrouter_api_key()
-        os.environ.setdefault("OPENAI_API_KEY", api_key)
-        os.environ.setdefault("OPENAI_BASE_URL", OPENROUTER_BASE_URL)
         _install_openai_usage_capture()
 
         config = dict(self.provider_config)
+        llm = dict(config.get("llm", {}))
+        llm_config = dict(llm.get("config", {}))
+        llm_config["api_key"] = api_key
+        llm["config"] = llm_config
+        config["llm"] = llm
+
         embedder = dict(config.get("embedder", {}))
         embedder_config = dict(embedder.get("config", {}))
         embedder_config["api_key"] = api_key
@@ -466,6 +493,65 @@ class Mem0Provider(BaseMemoryProvider):
             "provider": self.provider_name,
         }
 
+    def _record_has_any_scope(self, record: MemoryRecord) -> bool:
+        return any(
+            isinstance(record.get(field_name), str) and str(record.get(field_name)).strip()
+            for field_name in ("user_id", "agent_id", "run_id")
+        )
+
+    def _sync_scope_registry_upsert(self, *, operation: str, record: MemoryRecord) -> None:
+        memory_id = str(record.get("id", "")) or None
+        if not self._record_has_any_scope(record):
+            try:
+                scope_registry.mark_sync_failed(
+                    self.provider_name,
+                    self.runtime_dir,
+                    operation=operation,
+                    memory_id=memory_id,
+                    error=ProviderValidationError("Registry sync skipped because mem0 returned a record without scope fields."),
+                )
+            except Exception:
+                pass
+            return
+        try:
+            scope_registry.upsert_record(self.provider_name, record, self.runtime_dir)
+        except Exception as exc:
+            try:
+                scope_registry.mark_sync_failed(
+                    self.provider_name,
+                    self.runtime_dir,
+                    operation=operation,
+                    memory_id=memory_id,
+                    error=exc,
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                scope_registry.clear_sync_failure(self.provider_name, self.runtime_dir)
+            except Exception:
+                pass
+
+    def _sync_scope_registry_delete(self, *, operation: str, memory_id: str) -> None:
+        try:
+            scope_registry.delete_record(self.provider_name, memory_id, self.runtime_dir)
+        except Exception as exc:
+            try:
+                scope_registry.mark_sync_failed(
+                    self.provider_name,
+                    self.runtime_dir,
+                    operation=operation,
+                    memory_id=memory_id,
+                    error=exc,
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                scope_registry.clear_sync_failure(self.provider_name, self.runtime_dir)
+            except Exception:
+                pass
+
     def _scope_kind_field(self, kind: str) -> str:
         field_map = {"user": "user_id", "agent": "agent_id", "run": "run_id"}
         if kind not in field_map:
@@ -506,42 +592,7 @@ class Mem0Provider(BaseMemoryProvider):
         return payloads
 
     def list_scopes(self, *, limit: int = 200, kind: str | None = None, query: str | None = None) -> ScopeInventory:
-        all_kinds = ["user", "agent", "run"]
-        if kind is not None:
-            self._scope_kind_field(kind)
-        selected_kinds = [kind] if kind else all_kinds
-        field_map = {selected: self._scope_kind_field(selected) for selected in all_kinds}
-        query_l = query.lower() if query else None
-        buckets: dict[tuple[str, str], ScopeInventoryItem] = {}
-
-        with self._memory_lock:
-            payloads = self._iter_scope_payloads()
-
-        for payload in payloads:
-            for selected_kind, field_name in field_map.items():
-                value = payload.get(field_name)
-                if not isinstance(value, str) or not value.strip():
-                    continue
-                if query_l and query_l not in value.lower():
-                    continue
-                key = (selected_kind, value)
-                item = buckets.setdefault(
-                    key,
-                    {"kind": selected_kind, "value": value, "count": 0, "last_seen_at": None},
-                )
-                item["count"] += 1
-                timestamp = payload.get("updated_at") or payload.get("created_at")
-                if isinstance(timestamp, str) and timestamp and (item["last_seen_at"] is None or timestamp > item["last_seen_at"]):
-                    item["last_seen_at"] = timestamp
-
-        all_items = sorted(buckets.values(), key=lambda item: (item["kind"], -item["count"], item["value"]))
-        items = [item for item in all_items if item["kind"] in selected_kinds]
-        totals = {
-            "users": sum(1 for item in all_items if item["kind"] == "user"),
-            "agents": sum(1 for item in all_items if item["kind"] == "agent"),
-            "runs": sum(1 for item in all_items if item["kind"] == "run"),
-        }
-        return {"provider": self.provider_name, "items": items[:limit], "totals": totals}
+        return scope_registry.list_inventory(self.provider_name, limit, kind, query, self.runtime_dir)
 
     def _map_exception(self, exc: Exception) -> Exception:
         if isinstance(exc, ProviderConfigurationError):
@@ -624,7 +675,7 @@ class Mem0Provider(BaseMemoryProvider):
                 )
             except Exception as exc:
                 raise self._map_exception(exc) from exc
-            return self._normalize_add_result(
+            record = self._normalize_add_result(
                 payload,
                 memory=memory,
                 user_id=user_id,
@@ -633,6 +684,8 @@ class Mem0Provider(BaseMemoryProvider):
                 metadata=metadata,
                 memory_type=memory_type,
             )
+        self._sync_scope_registry_upsert(operation="add", record=record)
+        return record
 
     def search_memory(self, *, query, user_id=None, agent_id=None, run_id=None, limit=10, filters=None, threshold=None, rerank=True) -> list[MemoryRecord]:
         if not self.capabilities()["supports_rerank"] and rerank:
@@ -686,10 +739,13 @@ class Mem0Provider(BaseMemoryProvider):
                 raise self._map_exception(exc) from exc
             if self._looks_like_success_message(payload, verb="update"):
                 try:
-                    return self._normalize_one_record(memory.get(memory_id))
+                    record = self._normalize_one_record(memory.get(memory_id))
                 except Exception as exc:
                     raise self._map_exception(exc) from exc
-            return self._normalize_one_record(payload)
+            else:
+                record = self._normalize_one_record(payload)
+        self._sync_scope_registry_upsert(operation="update", record=record)
+        return record
 
     def delete_memory(self, *, memory_id) -> DeleteResult:
         with self._memory_lock:
@@ -698,9 +754,17 @@ class Mem0Provider(BaseMemoryProvider):
             except Exception as exc:
                 raise self._map_exception(exc) from exc
             if self._looks_like_success_message(payload, verb="delete"):
-                return {
+                result = {
                     "id": str(memory_id),
                     "deleted": True,
                     "provider": self.provider_name,
                 }
-            return self._normalize_delete_result(payload, memory_id=str(memory_id))
+            else:
+                result = self._normalize_delete_result(payload, memory_id=str(memory_id))
+        self._sync_scope_registry_delete(operation="delete", memory_id=str(memory_id))
+        return result
+
+    def iter_scope_registry_seed_records(self) -> list[MemoryRecord]:
+        with self._memory_lock:
+            payloads = self._iter_scope_payloads()
+        return [self._normalize_record(payload) for payload in payloads if isinstance(payload, dict)]

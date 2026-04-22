@@ -25,7 +25,7 @@ class AgentMemoryOperationAdaptersTests(unittest.TestCase):
             agent_id=None,
             run_id=None,
             metadata='{"topic":"docs"}',
-            no_infer=False,
+            infer=True,
             memory_type="preference",
         )
         source = cli_operation_source("add", args, parse_json_arg=lambda raw: {"topic": "docs"} if raw else None)
@@ -34,6 +34,19 @@ class AgentMemoryOperationAdaptersTests(unittest.TestCase):
         self.assertEqual(source["messages"][1]["content"], "world")
         self.assertEqual(source["metadata"], {"topic": "docs"})
         self.assertTrue(source["infer"])
+
+    def test_cli_operation_source_defaults_add_infer_to_false(self) -> None:
+        args = argparse.Namespace(
+            message=["hello"],
+            user_id="u1",
+            agent_id=None,
+            run_id=None,
+            metadata=None,
+            memory_type=None,
+        )
+        source = cli_operation_source("add", args, parse_json_arg=lambda raw: None)
+
+        self.assertFalse(source["infer"])
 
     def test_cli_operation_source_builds_list_scopes_payload(self) -> None:
         args = argparse.Namespace(limit=25, kind="user", query="def")

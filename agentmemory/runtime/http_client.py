@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -21,6 +23,12 @@ from agentmemory.providers.base import (
 OWNER_ENV = "AGENTMEMORY_OWNER_PROCESS"
 START_API = launcher_path(BASE_DIR, "start-agentmemory-api")
 API_START_TIMEOUT_SECONDS = 20.0
+API_START_LOCK_FILE = BASE_DIR / "data" / "agentmemory-api.start.lock"
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 
 def should_proxy_to_api() -> bool:
@@ -37,9 +45,19 @@ def api_base_url() -> str:
     return f"http://{current_api_host()}:{current_api_port()}"
 
 
+def _authorization_header() -> str | None:
+    token = os.environ.get("AGENTMEMORY_API_TOKEN", "").strip()
+    if not token:
+        return None
+    return f"Bearer {token}"
+
+
 def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
     data = None
     headers = {"Accept": "application/json"}
+    authorization = _authorization_header()
+    if authorization is not None:
+        headers["Authorization"] = authorization
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
         headers["Content-Type"] = "application/json; charset=utf-8"
@@ -75,28 +93,52 @@ def api_is_healthy() -> bool:
     return bool(payload.get("ok"))
 
 
+@contextlib.contextmanager
+def _api_start_lock():
+    lock_path = Path(API_START_LOCK_FILE)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        lock_file.seek(0)
+        if os.name == "nt":
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            lock_file.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def ensure_api_running() -> None:
     if api_is_healthy():
         return
 
-    env = os.environ.copy()
-    env[OWNER_ENV] = "1"
-    subprocess.run(
-        [*launcher_command(START_API), current_api_host(), str(current_api_port())],
-        check=False,
-        env=env,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-    )
-    clear_caches()
-
-    deadline = time.time() + API_START_TIMEOUT_SECONDS
-    while time.time() < deadline:
+    with _api_start_lock():
         if api_is_healthy():
             return
-        time.sleep(0.5)
+
+        env = os.environ.copy()
+        env[OWNER_ENV] = "1"
+        subprocess.run(
+            [*launcher_command(START_API), current_api_host(), str(current_api_port())],
+            check=False,
+            env=env,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+        )
+        clear_caches()
+
+        deadline = time.time() + API_START_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            if api_is_healthy():
+                return
+            time.sleep(0.5)
 
     raise ProviderUnavailableError(f"AgentMemory API did not become ready at {api_base_url()} within {API_START_TIMEOUT_SECONDS:.0f}s")
 
@@ -106,7 +148,7 @@ def proxy_health() -> dict[str, Any]:
     return _request("GET", "/health")
 
 
-def proxy_add(*, messages, user_id=None, agent_id=None, run_id=None, metadata=None, infer=True, memory_type=None):
+def proxy_add(*, messages, user_id=None, agent_id=None, run_id=None, metadata=None, infer, memory_type=None):
     ensure_api_running()
     return _request(
         "POST",
@@ -123,7 +165,7 @@ def proxy_add(*, messages, user_id=None, agent_id=None, run_id=None, metadata=No
     )
 
 
-def proxy_search(*, query, user_id=None, agent_id=None, run_id=None, limit=10, filters=None, threshold=None, rerank=True):
+def proxy_search(*, query, user_id=None, agent_id=None, run_id=None, limit=10, filters=None, threshold=None, rerank):
     ensure_api_running()
     return _request(
         "POST",
