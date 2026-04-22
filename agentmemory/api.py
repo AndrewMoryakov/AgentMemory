@@ -1,5 +1,6 @@
 import atexit
 import base64
+import math
 import hmac
 import json
 import mimetypes
@@ -7,6 +8,8 @@ import os
 import signal
 import socket
 import sys
+import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -49,10 +52,44 @@ WEB_DIR = BASE_DIR / "web" / "dist"
 SPA_ROUTES = {"/", "/me"}
 SPA_ROOT_ASSETS = {"/favicon.ico", "/vite.svg", "/manifest.webmanifest", "/robots.txt"}
 DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
+DEFAULT_RATE_LIMIT_PER_MINUTE = 60
 
 
 class RequestBodyTooLarge(ProviderValidationError):
     pass
+
+
+class RateLimitExceeded(ProviderError):
+    pass
+
+
+class _TokenBucketLimiter:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._buckets: dict[str, tuple[float, float]] = {}
+
+    def reset(self) -> None:
+        with self._lock:
+            self._buckets.clear()
+
+    def allow(self, key: str, *, capacity: int, period_seconds: float = 60.0) -> tuple[bool, int]:
+        if capacity <= 0:
+            return True, 0
+        now = time.monotonic()
+        refill_per_second = capacity / period_seconds
+        with self._lock:
+            tokens, updated_at = self._buckets.get(key, (float(capacity), now))
+            elapsed = max(0.0, now - updated_at)
+            tokens = min(float(capacity), tokens + (elapsed * refill_per_second))
+            if tokens >= 1.0:
+                self._buckets[key] = (tokens - 1.0, now)
+                return True, 0
+            retry_after = max(1, math.ceil((1.0 - tokens) / refill_per_second))
+            self._buckets[key] = (tokens, now)
+            return False, retry_after
+
+
+_RATE_LIMITER = _TokenBucketLimiter()
 
 
 def _max_body_bytes() -> int:
@@ -71,6 +108,17 @@ def _configured_token() -> str | None:
     return token or None
 
 
+def _rate_limit_per_minute() -> int:
+    raw = os.environ.get("AGENTMEMORY_RATE_LIMIT_PER_MINUTE", "").strip()
+    if not raw:
+        return DEFAULT_RATE_LIMIT_PER_MINUTE
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_RATE_LIMIT_PER_MINUTE
+    return value if value > 0 else DEFAULT_RATE_LIMIT_PER_MINUTE
+
+
 def _ui_disabled() -> bool:
     return os.environ.get("AGENTMEMORY_DISABLE_UI", "").strip() in {"1", "true", "yes"}
 
@@ -82,23 +130,27 @@ class Handler(BaseHTTPRequestHandler):
     def _client_disconnected(exc: Exception) -> bool:
         return isinstance(exc, (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, socket.error))
 
-    def _send(self, status, payload):
+    def _send(self, status, payload, headers: dict[str, str] | None = None):
         body = json.dumps(payload, ensure_ascii=True, default=str).encode("utf-8")
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(body)
         except Exception as exc:
             if not self._client_disconnected(exc):
                 raise
 
-    def _send_bytes(self, status, body: bytes, content_type: str) -> None:
+    def _send_bytes(self, status, body: bytes, content_type: str, headers: dict[str, str] | None = None) -> None:
         try:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(body)
         except Exception as exc:
@@ -147,19 +199,53 @@ class Handler(BaseHTTPRequestHandler):
         prefix = (self.headers.get("X-Forwarded-Prefix") or "").rstrip("/")
         return f"{scheme}://{host}{prefix}"
 
+    def _presented_bearer(self) -> str | None:
+        header = self.headers.get("Authorization", "")
+        if not header.lower().startswith("bearer "):
+            return None
+        token = header[7:].strip()
+        return token or None
+
+    def _authorized_bearer(self) -> str | None:
+        expected = _configured_token()
+        oauth_on = oauth_state.oauth_enabled()
+        presented = self._presented_bearer()
+        if presented is None:
+            return None
+        if expected is not None and hmac.compare_digest(presented, expected):
+            return presented
+        if oauth_on and oauth_state.validate_access_token(presented):
+            return presented
+        return None
+
     def _is_authorized(self) -> bool:
         expected = _configured_token()
         oauth_on = oauth_state.oauth_enabled()
         if expected is None and not oauth_on:
             return True
-        header = self.headers.get("Authorization", "")
-        if not header.lower().startswith("bearer "):
-            return False
-        presented = header[7:].strip()
-        if expected is not None and hmac.compare_digest(presented, expected):
+        return self._authorized_bearer() is not None
+
+    def _rate_limit_key(self) -> str | None:
+        bearer = self._authorized_bearer()
+        if bearer is not None:
+            return f"bearer:{bearer}"
+        return None
+
+    def _require_rate_limit(self, key: str | None) -> bool:
+        if key is None:
             return True
-        if oauth_on and oauth_state.validate_access_token(presented):
+        allowed, retry_after = _RATE_LIMITER.allow(key, capacity=_rate_limit_per_minute())
+        if allowed:
             return True
+        self._send(
+            429,
+            {
+                "error": "Rate limit exceeded",
+                "error_type": "RateLimitExceeded",
+                "message": "Too many requests. Retry later.",
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
         return False
 
     def _require_auth(self) -> bool:
@@ -295,6 +381,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+        client_key = given_client_id or "anonymous"
+        if not self._require_rate_limit(f"oauth-client:{client_key}"):
+            return
+
         if given_client_id != expected_client_id or not oauth_state.verify_client_secret(given_client_secret):
             self._send(401, {"error": "invalid_client"})
             return
@@ -386,6 +476,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/metrics":
                 if not self._require_auth():
                     return
+                if not self._require_rate_limit(self._rate_limit_key()):
+                    return
                 body = metrics_registry.prometheus_text().encode("utf-8")
                 self._send_bytes(200, body, "text/plain; version=0.0.4; charset=utf-8")
                 return
@@ -399,6 +491,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_oauth_authorize(params)
                 return
             if not self._require_auth():
+                return
+            if not self._require_rate_limit(self._rate_limit_key()):
                 return
             if parsed.path == "/admin/stats":
                 self._send(200, admin_stats(limit=int(params.get("limit", [500])[0])))
@@ -459,6 +553,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_oauth_token()
                 return
             if not self._require_auth():
+                return
+            if not self._require_rate_limit(self._rate_limit_key()):
                 return
             if self.path == "/mcp":
                 self._handle_mcp_post()
@@ -533,6 +629,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not self._require_auth():
                 return
+            if not self._require_rate_limit(self._rate_limit_key()):
+                return
             if self.path.startswith("/admin/memories/"):
                 memory_id = self.path.rsplit("/", 1)[-1]
                 payload = self._read_json()
@@ -559,6 +657,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         try:
             if not self._require_auth():
+                return
+            if not self._require_rate_limit(self._rate_limit_key()):
                 return
             if self.path.startswith("/admin/memories/"):
                 memory_id = self.path.rsplit("/", 1)[-1]

@@ -46,7 +46,7 @@ Format per entry:
 
 ## 2. No rate limiting on `/mcp` or `/oauth/token`
 
-- **Status:** open
+- **Status:** closed
 - **Severity:** bug (abuse risk)
 - **Why:** Anyone with the bearer token (or a leaked OAuth client
   secret) can loop `memory_add` and drain OpenRouter budget. Today only the
@@ -61,12 +61,13 @@ Format per entry:
 - **Where:** `agentmemory/api.py` — in the bearer-auth path shared by `/mcp`,
   `/add`, `/search`, `/update`, `/memories`, `/admin/*`, and `/oauth/token`.
 
-- **Fix outline:** in-process token bucket keyed by the bearer value (or OAuth
-  client_id), 60 requests / minute default, override via
-  `AGENTMEMORY_RATE_LIMIT_PER_MINUTE` env. 429 response on overrun with
-  `Retry-After` header. No Redis dependency — in-memory fine for single-
-  instance deployment, and the sliding window resets on restart which is
-  acceptable for anti-abuse rather than quota enforcement.
+- **Fix:** `agentmemory/api.py` now enforces an in-process token bucket keyed
+  by the presented bearer token for authenticated API requests and by OAuth
+  `client_id` for `/oauth/token`. The default is 60 requests / minute,
+  overridable via `AGENTMEMORY_RATE_LIMIT_PER_MINUTE`. Overrun returns `429`
+  with a `Retry-After` header. `/health`, `/.well-known/oauth-*`, and
+  `/oauth/authorize` remain unthrottled. `tests/test_agentmemory_api.py`
+  covers both bearer-auth and OAuth token-exchange rate limiting.
 
 - **Scope note:** `/health`, `/.well-known/oauth-*`, and `/oauth/authorize`
   stay unthrottled — they're either unauthenticated liveness or part of the
