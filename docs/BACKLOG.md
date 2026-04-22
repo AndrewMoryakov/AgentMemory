@@ -166,7 +166,7 @@ Format per entry:
 
 ## 6. Conflict detection / memory hygiene
 
-- **Status:** open
+- **Status:** closed
 - **Severity:** hygiene (feature gap)
 - **Why:** Already have TTL and dedup-on-add. The next step in "real memory
   runtime, not just an append-only store" is detecting contradictory
@@ -180,6 +180,18 @@ Format per entry:
 - **Where:** would live in a new `agentmemory/runtime/reconcile.py` with a
   dedicated MCP tool (`memory_reconcile` returning conflict pairs), and
   optional enforcement policy in `memory_add` (warn / reject / supersede).
+
+- **Fix:** `agentmemory/runtime/reconcile.py` now provides the first
+  read-only memory hygiene pass. `memory_reconcile` lists memories in a
+  caller-specified scope through the normal runtime transport, applies
+  conservative deterministic claim heuristics, and returns likely conflict
+  pairs without mutating storage. The first version detects opposite-polarity
+  text claims (`likes` / `does not like`, `is` / `is not`), different values
+  for the same simple preference/fact claim, and structured metadata claims
+  via `claim_key`/`claim_value` or `conflict_key`/`claim_value`. CLI access is
+  available through `agentmemory reconcile-memories`. Enforcement policies
+  (`warn` / `reject` / `supersede`) remain intentionally out of scope until
+  the read-only signal is proven useful.
 
 ---
 

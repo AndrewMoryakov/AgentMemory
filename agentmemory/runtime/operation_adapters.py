@@ -59,6 +59,14 @@ def cli_operation_source(
             "limit": args.limit,
             "filters": parse_json_arg(args.filters),
         }
+    if command == "reconcile":
+        return {
+            "user_id": args.user_id,
+            "agent_id": args.agent_id,
+            "run_id": args.run_id,
+            "limit": args.limit,
+            "filters": parse_json_arg(args.filters),
+        }
     if command == "get":
         return {"memory_id": args.memory_id}
     if command == "update":

@@ -179,6 +179,37 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
         self.assertEqual(payload["path"], "memories.jsonl")
         self.assertEqual(payload["exported"], 2)
 
+    def test_cli_reconcile_prints_structured_success_payload(self) -> None:
+        original_argv = sys.argv
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        original_spec = agentmemory_operations.OPERATIONS["reconcile"]
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        try:
+            sys.argv = ["agentmemory_cli.py", "reconcile", "--user-id", "u1"]
+            sys.stdout = stdout_buffer
+            sys.stderr = stderr_buffer
+            agentmemory_operations.OPERATIONS["reconcile"] = original_spec.__class__(
+                name="reconcile",
+                mcp_name="memory_reconcile",
+                title="Reconcile Memories",
+                description="Reconcile memories.",
+                input_schema=original_spec.input_schema,
+                execute=lambda source: {"user_id": source["user_id"], "conflict_count": 1},
+            )
+            rc = agentmemory_cli.main()
+        finally:
+            sys.argv = original_argv
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            agentmemory_operations.OPERATIONS["reconcile"] = original_spec
+
+        self.assertEqual(rc, 0)
+        payload = json.loads(stdout_buffer.getvalue())
+        self.assertEqual(payload["user_id"], "u1")
+        self.assertEqual(payload["conflict_count"], 1)
+
     def test_cli_search_rejects_missing_required_scope_before_provider_call(self) -> None:
         original_argv = sys.argv
         original_stdout = sys.stdout

@@ -188,6 +188,11 @@ record with `dedup_hit: true` and `dedup_score` instead of creating a
 duplicate. `infer=true` rewrites still get de-duplicated against the
 rewritten text.
 
+**Reconcile.** Run `memory_reconcile` or `agentmemory reconcile-memories` with
+`user_id`, `agent_id`, or `run_id` to perform a read-only memory hygiene check.
+The first pass uses conservative deterministic heuristics to surface likely
+conflicting claim pairs; it never edits, deletes, or supersedes records.
+
 ## Network topology
 
 ```

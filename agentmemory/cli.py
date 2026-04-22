@@ -810,6 +810,32 @@ def command_import_memories(args: argparse.Namespace) -> int:
     return result.returncode
 
 
+def command_reconcile_memories(args: argparse.Namespace) -> int:
+    heading('AgentMemory Reconcile')
+    result = run(
+        [
+            str(VENV_PYTHON),
+            '-m',
+            OPS_CLI_MODULE,
+            'reconcile',
+            '--limit',
+            str(args.limit),
+            *(['--user-id', args.user_id] if args.user_id else []),
+            *(['--agent-id', args.agent_id] if args.agent_id else []),
+            *(['--run-id', args.run_id] if args.run_id else []),
+            *(['--filters', args.filters] if args.filters else []),
+        ],
+        check=False,
+        capture_output=True,
+        env=merged_env(),
+    )
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+    return result.returncode
+
+
 def command_rebuild_scope_registry(_: argparse.Namespace) -> int:
     heading('AgentMemory Scope Registry')
     payload = rebuild_scope_registry()
@@ -1095,6 +1121,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     import_parser.add_argument('path')
     import_parser.set_defaults(func=command_import_memories)
+
+    reconcile_parser = subparsers.add_parser(
+        'reconcile-memories',
+        help='Run a read-only memory hygiene check for likely conflicting memories.',
+    )
+    reconcile_parser.add_argument('--user-id')
+    reconcile_parser.add_argument('--agent-id')
+    reconcile_parser.add_argument('--run-id')
+    reconcile_parser.add_argument('--limit', type=int, default=100)
+    reconcile_parser.add_argument('--filters')
+    reconcile_parser.set_defaults(func=command_reconcile_memories)
 
     rebuild_scope_registry_parser = subparsers.add_parser(
         'rebuild-scope-registry',

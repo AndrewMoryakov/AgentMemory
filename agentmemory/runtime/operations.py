@@ -30,6 +30,7 @@ from agentmemory.runtime.config import (
 from agentmemory.runtime import lifecycle as lifecycle_module
 from agentmemory.runtime import metrics as metrics_registry
 from agentmemory.runtime import portability as portability_module
+from agentmemory.runtime import reconcile as reconcile_module
 from agentmemory.runtime.transport import execute_transport_operation, validate_and_build_list_kwargs, validate_and_build_search_kwargs
 from agentmemory.providers.base import MemoryNotFoundError
 
@@ -273,6 +274,38 @@ def _execute_list(source: dict[str, Any]) -> Any:
     )
 
 
+def _execute_reconcile(source: dict[str, Any]) -> Any:
+    kwargs = validate_and_build_list_kwargs(
+        provider_name=active_provider_name(),
+        capabilities=active_provider_capabilities(),
+        source=source,
+        default_limit=100,
+    )
+    records = _filter_unexpired_with_limit_refill(
+        kwargs=kwargs,
+        default_limit=100,
+        fetch=lambda attempt_kwargs: execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_list(**attempt_kwargs),
+            proxy_call=lambda: proxy_list(**attempt_kwargs),
+        ),
+    )
+    if not isinstance(records, list):
+        records = []
+    conflicts = reconcile_module.find_conflicts(records)
+    return {
+        "provider": active_provider_name(),
+        "scope": {
+            "user_id": kwargs.get("user_id"),
+            "agent_id": kwargs.get("agent_id"),
+            "run_id": kwargs.get("run_id"),
+        },
+        "checked": len(records),
+        "conflicts": conflicts,
+        "conflict_count": len(conflicts),
+    }
+
+
 def _execute_get(source: dict[str, Any]) -> Any:
     memory_id = source["memory_id"]
     result = execute_transport_operation(
@@ -470,6 +503,27 @@ OPERATIONS: dict[str, OperationSpec] = {
             "additionalProperties": False,
         },
         execute=_execute_list,
+    ),
+    "reconcile": OperationSpec(
+        name="reconcile",
+        mcp_name="memory_reconcile",
+        title="Reconcile Memories",
+        description=(
+            "Read-only memory hygiene check. Lists memories in a scope and returns likely "
+            "conflicting claim pairs without modifying storage."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "agent_id": {"type": "string"},
+                "run_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 100, "minimum": 1},
+                "filters": {"type": "object"},
+            },
+            "additionalProperties": False,
+        },
+        execute=_execute_reconcile,
     ),
     "get": OperationSpec(
         name="get",

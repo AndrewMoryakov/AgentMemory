@@ -33,6 +33,7 @@ class AgentMemoryMcpServerTests(unittest.TestCase):
         self.assertIn("memory_list_scopes", tool_names)
         self.assertIn("memory_export", tool_names)
         self.assertIn("memory_import", tool_names)
+        self.assertIn("memory_reconcile", tool_names)
 
     def test_unknown_tool_returns_jsonrpc_error(self) -> None:
         response = agentmemory_mcp_server.handle_request(
@@ -285,6 +286,34 @@ class AgentMemoryMcpServerTests(unittest.TestCase):
         result = response["result"]
         self.assertFalse(result["isError"])
         self.assertEqual(result["structuredContent"]["path"], "memories.jsonl")
+
+    def test_reconcile_call_returns_structured_success_payload(self) -> None:
+        original_spec = agentmemory_mcp_server.OPERATIONS_BY_MCP_NAME["memory_reconcile"]
+        try:
+            agentmemory_mcp_server.OPERATIONS_BY_MCP_NAME["memory_reconcile"] = agentmemory_operations.OperationSpec(
+                name="reconcile",
+                mcp_name="memory_reconcile",
+                title="Reconcile Memories",
+                description="Reconcile memories.",
+                input_schema=original_spec.input_schema,
+                execute=lambda source: {"checked": 2, "conflict_count": 1, "conflicts": [], **source},
+            )
+            response = agentmemory_mcp_server.handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 10,
+                    "method": "tools/call",
+                    "params": {"name": "memory_reconcile", "arguments": {"user_id": "u1", "limit": 25}},
+                }
+            )
+        finally:
+            agentmemory_mcp_server.OPERATIONS_BY_MCP_NAME["memory_reconcile"] = original_spec
+
+        self.assertIsNotNone(response)
+        result = response["result"]
+        self.assertFalse(result["isError"])
+        self.assertEqual(result["structuredContent"]["user_id"], "u1")
+        self.assertEqual(result["structuredContent"]["conflict_count"], 1)
 
 
 if __name__ == "__main__":

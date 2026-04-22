@@ -175,6 +175,38 @@ class AgentMemoryCoreTests(unittest.TestCase):
         self.assertIn("memories.jsonl", captured["command"])
         self.assertIn('"imported": 2', buffer.getvalue())
 
+    def test_command_reconcile_memories_invokes_ops_cli_reconcile(self) -> None:
+        original_run = agentmemory.run
+        original_stdout = agentmemory.sys.stdout
+        buffer = StringIO()
+        captured: dict[str, object] = {}
+
+        class FakeCompleted:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self.stdout = '{"conflict_count": 1}'
+                self.stderr = ""
+
+        try:
+            def fake_run(command, **kwargs):
+                captured["command"] = list(command)
+                return FakeCompleted()
+
+            agentmemory.run = fake_run  # type: ignore[assignment]
+            agentmemory.sys.stdout = buffer
+            rc = agentmemory.command_reconcile_memories(
+                argparse.Namespace(user_id="u1", agent_id=None, run_id=None, limit=25, filters=None)
+            )
+        finally:
+            agentmemory.run = original_run  # type: ignore[assignment]
+            agentmemory.sys.stdout = original_stdout
+
+        self.assertEqual(rc, 0)
+        self.assertIn("reconcile", captured["command"])
+        self.assertIn("--user-id", captured["command"])
+        self.assertIn("u1", captured["command"])
+        self.assertIn('"conflict_count": 1', buffer.getvalue())
+
     def test_resolve_api_start_port_returns_requested_port_when_free(self) -> None:
         original_can_bind_api_port = agentmemory.can_bind_api_port
         try:

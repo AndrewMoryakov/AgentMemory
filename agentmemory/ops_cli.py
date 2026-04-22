@@ -64,6 +64,13 @@ def main() -> int:
     list_parser.add_argument("--limit", type=int, default=100)
     list_parser.add_argument("--filters")
 
+    reconcile_parser = subparsers.add_parser("reconcile")
+    reconcile_parser.add_argument("--user-id")
+    reconcile_parser.add_argument("--agent-id")
+    reconcile_parser.add_argument("--run-id")
+    reconcile_parser.add_argument("--limit", type=int, default=100)
+    reconcile_parser.add_argument("--filters")
+
     get_parser = subparsers.add_parser("get")
     get_parser.add_argument("memory_id")
 
@@ -103,6 +110,10 @@ def main() -> int:
             return 0
         if args.command == "list":
             result = OPERATIONS["list"].execute(cli_operation_source("list", args, parse_json_arg=parse_metadata))
+            print_json(result)
+            return 0
+        if args.command == "reconcile":
+            result = OPERATIONS["reconcile"].execute(cli_operation_source("reconcile", args, parse_json_arg=parse_metadata))
             print_json(result)
             return 0
         if args.command == "get":
