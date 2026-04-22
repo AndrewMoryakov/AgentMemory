@@ -105,7 +105,7 @@ Format per entry:
 
 ## 4. No provider-neutral memory export/import
 
-- **Status:** open
+- **Status:** closed
 - **Severity:** hygiene
 - **Why:** Memories currently live in a provider-shaped store (Qdrant for
   mem0, flat JSON for localjson). Migrating between providers or between
@@ -438,14 +438,15 @@ Format per entry:
 - **Where:** `agentmemory/clients.py` — module-level path constants
   (L22–27).
 
-- **Fix outline:** resolve each client config path through a
-  platform-aware helper:
-  Windows → `%APPDATA%`;
-  macOS → `~/Library/Application Support`;
-  Linux → `$XDG_CONFIG_HOME` (fallback `~/.config`).
-  Reuse or extend `agentmemory/platform.py`. Fix `config_doctor` to use
-  `path.exists()` for three-state reporting
-  (`not_installed` / `installed_unconfigured` / `configured`).
+- **Fix:** `agentmemory/clients.py` now resolves client config paths through
+  platform-aware helpers instead of hardcoded Windows `AppData/Roaming`
+  constants. Windows uses `%APPDATA%` (fallback `~/AppData/Roaming`), macOS
+  uses `~/Library/Application Support`, and Linux uses `$XDG_CONFIG_HOME`
+  (fallback `~/.config`). `connect-clients`, `status-clients`, and
+  `doctor-clients` now read those helpers at call time, so non-Windows runs no
+  longer inspect or create fake `~/AppData/Roaming/...` trees.
+  `tests/test_agentmemory_clients.py` covers Windows, macOS, Linux, and the
+  Linux lowercase `claude` fallback for existing setups.
 
 ---
 

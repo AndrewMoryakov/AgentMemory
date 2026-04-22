@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -20,13 +21,58 @@ CLAUDE_CODE_CONFIG = Path.home() / ".claude.json"
 GEMINI_SETTINGS = Path.home() / ".gemini" / "settings.json"
 QWEN_SETTINGS = Path.home() / ".qwen" / "settings.json"
 CURSOR_MCP = Path.home() / ".cursor" / "mcp.json"
-CLAUDE_DESKTOP_CONFIG = Path.home() / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json"
-VSCODE_MCP = Path.home() / "AppData" / "Roaming" / "Code" / "User" / "mcp.json"
-ROO_MCP = Path.home() / "AppData" / "Roaming" / "Code" / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json"
-KILO_MCP = Path.home() / "AppData" / "Roaming" / "Code" / "User" / "globalStorage" / "kilocode.kilo-code" / "settings" / "mcp_settings.json"
-CLINE_VSCODE_MCP = Path.home() / "AppData" / "Roaming" / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "mcp_settings.json"
-CLINE_CURSOR_MCP = Path.home() / "AppData" / "Roaming" / "Cursor" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "mcp_settings.json"
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _platform_name() -> str:
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
+def _roaming_config_root() -> Path:
+    if _platform_name() == "windows":
+        appdata = os.environ.get("APPDATA", "").strip()
+        if appdata:
+            return Path(appdata)
+        return Path.home() / "AppData" / "Roaming"
+    if _platform_name() == "macos":
+        return Path.home() / "Library" / "Application Support"
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    if xdg:
+        return Path(xdg)
+    return Path.home() / ".config"
+
+
+def claude_desktop_config_path() -> Path:
+    root = _roaming_config_root()
+    if _platform_name() == "linux":
+        primary = root / "Claude" / "claude_desktop_config.json"
+        fallback = root / "claude" / "claude_desktop_config.json"
+        return fallback if fallback.exists() and not primary.exists() else primary
+    return root / "Claude" / "claude_desktop_config.json"
+
+
+def vscode_mcp_path() -> Path:
+    return _roaming_config_root() / "Code" / "User" / "mcp.json"
+
+
+def roo_mcp_path() -> Path:
+    return _roaming_config_root() / "Code" / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json"
+
+
+def kilo_mcp_path() -> Path:
+    return _roaming_config_root() / "Code" / "User" / "globalStorage" / "kilocode.kilo-code" / "settings" / "mcp_settings.json"
+
+
+def cline_vscode_mcp_path() -> Path:
+    return _roaming_config_root() / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "mcp_settings.json"
+
+
+def cline_cursor_mcp_path() -> Path:
+    return _roaming_config_root() / "Cursor" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "mcp_settings.json"
 
 
 def quote_ps(value: str) -> str:
@@ -387,40 +433,44 @@ def connect_cursor(backup_dir: Path) -> dict[str, Any]:
 
 
 def connect_claude_desktop(backup_dir: Path) -> dict[str, Any]:
-    result = merge_server_json(CLAUDE_DESKTOP_CONFIG, "mcpServers", SERVER_NAME, stdio_server_config(), backup_dir)
+    result = merge_server_json(claude_desktop_config_path(), "mcpServers", SERVER_NAME, stdio_server_config(), backup_dir)
     result["target"] = "claude-desktop"
     return result
 
 
 def connect_vscode_copilot(backup_dir: Path) -> dict[str, Any]:
-    result = merge_server_json(VSCODE_MCP, "servers", SERVER_NAME, stdio_server_config(), backup_dir)
+    result = merge_server_json(vscode_mcp_path(), "servers", SERVER_NAME, stdio_server_config(), backup_dir)
     result["target"] = "copilot-vscode"
     return result
 
 
 def connect_roo_code(backup_dir: Path) -> dict[str, Any]:
-    if not ROO_MCP.parent.exists():
+    roo_path = roo_mcp_path()
+    if not roo_path.parent.exists():
         return {"target": "roo-code", "status": "skipped", "reason": "not detected"}
-    result = merge_server_json(ROO_MCP, "mcpServers", SERVER_NAME, stdio_server_config(), backup_dir)
+    result = merge_server_json(roo_path, "mcpServers", SERVER_NAME, stdio_server_config(), backup_dir)
     result["target"] = "roo-code"
     return result
 
 
 def connect_kilocode(backup_dir: Path) -> dict[str, Any]:
-    if not KILO_MCP.parent.exists():
+    kilo_path = kilo_mcp_path()
+    if not kilo_path.parent.exists():
         return {"target": "kilocode", "status": "skipped", "reason": "not detected"}
-    result = merge_server_json(KILO_MCP, "mcpServers", SERVER_NAME, stdio_server_config(), backup_dir)
+    result = merge_server_json(kilo_path, "mcpServers", SERVER_NAME, stdio_server_config(), backup_dir)
     result["target"] = "kilocode"
     return result
 
 
 def connect_cline(backup_dir: Path) -> dict[str, Any]:
-    if CLINE_VSCODE_MCP.exists():
-        result = merge_server_json(CLINE_VSCODE_MCP, "mcpServers", SERVER_NAME, stdio_server_config(), backup_dir)
+    cline_vscode_path = cline_vscode_mcp_path()
+    cline_cursor_path = cline_cursor_mcp_path()
+    if cline_vscode_path.exists():
+        result = merge_server_json(cline_vscode_path, "mcpServers", SERVER_NAME, stdio_server_config(), backup_dir)
         result["target"] = "cline"
         return result
-    if CLINE_CURSOR_MCP.exists():
-        result = merge_server_json(CLINE_CURSOR_MCP, "mcpServers", SERVER_NAME, stdio_server_config(), backup_dir)
+    if cline_cursor_path.exists():
+        result = merge_server_json(cline_cursor_path, "mcpServers", SERVER_NAME, stdio_server_config(), backup_dir)
         result["target"] = "cline"
         return result
     return {"target": "cline", "status": "skipped", "reason": "not detected"}
@@ -449,40 +499,44 @@ def disconnect_cursor(backup_dir: Path) -> dict[str, Any]:
 
 
 def disconnect_claude_desktop(backup_dir: Path) -> dict[str, Any]:
-    result = remove_server_json(CLAUDE_DESKTOP_CONFIG, "mcpServers", SERVER_NAME, backup_dir)
+    result = remove_server_json(claude_desktop_config_path(), "mcpServers", SERVER_NAME, backup_dir)
     result["target"] = "claude-desktop"
     return result
 
 
 def disconnect_vscode_copilot(backup_dir: Path) -> dict[str, Any]:
-    result = remove_server_json(VSCODE_MCP, "servers", SERVER_NAME, backup_dir)
+    result = remove_server_json(vscode_mcp_path(), "servers", SERVER_NAME, backup_dir)
     result["target"] = "copilot-vscode"
     return result
 
 
 def disconnect_roo_code(backup_dir: Path) -> dict[str, Any]:
-    if not ROO_MCP.parent.exists():
+    roo_path = roo_mcp_path()
+    if not roo_path.parent.exists():
         return {"target": "roo-code", "status": "skipped", "reason": "not detected"}
-    result = remove_server_json(ROO_MCP, "mcpServers", SERVER_NAME, backup_dir)
+    result = remove_server_json(roo_path, "mcpServers", SERVER_NAME, backup_dir)
     result["target"] = "roo-code"
     return result
 
 
 def disconnect_kilocode(backup_dir: Path) -> dict[str, Any]:
-    if not KILO_MCP.parent.exists():
+    kilo_path = kilo_mcp_path()
+    if not kilo_path.parent.exists():
         return {"target": "kilocode", "status": "skipped", "reason": "not detected"}
-    result = remove_server_json(KILO_MCP, "mcpServers", SERVER_NAME, backup_dir)
+    result = remove_server_json(kilo_path, "mcpServers", SERVER_NAME, backup_dir)
     result["target"] = "kilocode"
     return result
 
 
 def disconnect_cline(backup_dir: Path) -> dict[str, Any]:
-    if CLINE_VSCODE_MCP.exists():
-        result = remove_server_json(CLINE_VSCODE_MCP, "mcpServers", SERVER_NAME, backup_dir)
+    cline_vscode_path = cline_vscode_mcp_path()
+    cline_cursor_path = cline_cursor_mcp_path()
+    if cline_vscode_path.exists():
+        result = remove_server_json(cline_vscode_path, "mcpServers", SERVER_NAME, backup_dir)
         result["target"] = "cline"
         return result
-    if CLINE_CURSOR_MCP.exists():
-        result = remove_server_json(CLINE_CURSOR_MCP, "mcpServers", SERVER_NAME, backup_dir)
+    if cline_cursor_path.exists():
+        result = remove_server_json(cline_cursor_path, "mcpServers", SERVER_NAME, backup_dir)
         result["target"] = "cline"
         return result
     return {"target": "cline", "status": "skipped", "reason": "not detected"}
@@ -534,20 +588,26 @@ def disconnect_all() -> dict[str, Any]:
 
 
 def status_all() -> dict[str, Any]:
+    claude_desktop_config = claude_desktop_config_path()
+    vscode_mcp = vscode_mcp_path()
+    roo_mcp = roo_mcp_path()
+    kilo_mcp = kilo_mcp_path()
+    cline_vscode_mcp = cline_vscode_mcp_path()
+    cline_cursor_mcp = cline_cursor_mcp_path()
     results = [
         cli_status("codex", "& codex.ps1 mcp list"),
         cli_status("claude-code", "& claude mcp list"),
-        config_status(CLAUDE_DESKTOP_CONFIG, "mcpServers", "claude-desktop"),
+        config_status(claude_desktop_config, "mcpServers", "claude-desktop"),
         cli_status("gemini-cli", "& gemini.ps1 mcp list"),
         cli_status("qwen-cli", "& qwen.ps1 mcp list"),
         config_status(CURSOR_MCP, "mcpServers", "cursor"),
-        config_status(VSCODE_MCP, "servers", "copilot-vscode"),
-        config_status(ROO_MCP, "mcpServers", "roo-code"),
-        config_status(KILO_MCP, "mcpServers", "kilocode"),
-        config_status(CLINE_VSCODE_MCP, "mcpServers", "cline"),
+        config_status(vscode_mcp, "servers", "copilot-vscode"),
+        config_status(roo_mcp, "mcpServers", "roo-code"),
+        config_status(kilo_mcp, "mcpServers", "kilocode"),
+        config_status(cline_vscode_mcp, "mcpServers", "cline"),
     ]
-    if not CLINE_VSCODE_MCP.exists() and CLINE_CURSOR_MCP.exists():
-        results[-1] = config_status(CLINE_CURSOR_MCP, "mcpServers", "cline")
+    if not cline_vscode_mcp.exists() and cline_cursor_mcp.exists():
+        results[-1] = config_status(cline_cursor_mcp, "mcpServers", "cline")
     return {
         "server_name": SERVER_NAME,
         "results": results,
@@ -555,20 +615,26 @@ def status_all() -> dict[str, Any]:
 
 
 def console_status_all() -> dict[str, Any]:
+    claude_desktop_config = claude_desktop_config_path()
+    vscode_mcp = vscode_mcp_path()
+    roo_mcp = roo_mcp_path()
+    kilo_mcp = kilo_mcp_path()
+    cline_vscode_mcp = cline_vscode_mcp_path()
+    cline_cursor_mcp = cline_cursor_mcp_path()
     results = [
         text_config_status(CODEX_CONFIG, "codex"),
         text_config_status(CLAUDE_CODE_CONFIG, "claude-code"),
-        config_status(CLAUDE_DESKTOP_CONFIG, "mcpServers", "claude-desktop"),
+        config_status(claude_desktop_config, "mcpServers", "claude-desktop"),
         text_config_status(GEMINI_SETTINGS, "gemini-cli"),
         text_config_status(QWEN_SETTINGS, "qwen-cli"),
         config_status(CURSOR_MCP, "mcpServers", "cursor"),
-        config_status(VSCODE_MCP, "servers", "copilot-vscode"),
-        config_status(ROO_MCP, "mcpServers", "roo-code"),
-        config_status(KILO_MCP, "mcpServers", "kilocode"),
-        config_status(CLINE_VSCODE_MCP, "mcpServers", "cline"),
+        config_status(vscode_mcp, "servers", "copilot-vscode"),
+        config_status(roo_mcp, "mcpServers", "roo-code"),
+        config_status(kilo_mcp, "mcpServers", "kilocode"),
+        config_status(cline_vscode_mcp, "mcpServers", "cline"),
     ]
-    if not CLINE_VSCODE_MCP.exists() and CLINE_CURSOR_MCP.exists():
-        results[-1] = config_status(CLINE_CURSOR_MCP, "mcpServers", "cline")
+    if not cline_vscode_mcp.exists() and cline_cursor_mcp.exists():
+        results[-1] = config_status(cline_cursor_mcp, "mcpServers", "cline")
     return {
         "server_name": SERVER_NAME,
         "results": results,
@@ -576,20 +642,26 @@ def console_status_all() -> dict[str, Any]:
 
 
 def doctor_all() -> dict[str, Any]:
+    claude_desktop_config = claude_desktop_config_path()
+    vscode_mcp = vscode_mcp_path()
+    roo_mcp = roo_mcp_path()
+    kilo_mcp = kilo_mcp_path()
+    cline_vscode_mcp = cline_vscode_mcp_path()
+    cline_cursor_mcp = cline_cursor_mcp_path()
     results = [
         cli_doctor("codex", "codex.ps1", "& codex.ps1 mcp list"),
         cli_doctor("claude-code", "claude", "& claude mcp list"),
-        config_doctor(CLAUDE_DESKTOP_CONFIG, "mcpServers", "claude-desktop"),
+        config_doctor(claude_desktop_config, "mcpServers", "claude-desktop"),
         cli_doctor("gemini-cli", "gemini.ps1", "& gemini.ps1 mcp list"),
         cli_doctor("qwen-cli", "qwen.ps1", "& qwen.ps1 mcp list"),
         config_doctor(CURSOR_MCP, "mcpServers", "cursor"),
-        config_doctor(VSCODE_MCP, "servers", "copilot-vscode"),
-        config_doctor(ROO_MCP, "mcpServers", "roo-code"),
-        config_doctor(KILO_MCP, "mcpServers", "kilocode"),
-        config_doctor(CLINE_VSCODE_MCP, "mcpServers", "cline"),
+        config_doctor(vscode_mcp, "servers", "copilot-vscode"),
+        config_doctor(roo_mcp, "mcpServers", "roo-code"),
+        config_doctor(kilo_mcp, "mcpServers", "kilocode"),
+        config_doctor(cline_vscode_mcp, "mcpServers", "cline"),
     ]
-    if not CLINE_VSCODE_MCP.exists() and CLINE_CURSOR_MCP.exists():
-        results[-1] = config_doctor(CLINE_CURSOR_MCP, "mcpServers", "cline")
+    if not cline_vscode_mcp.exists() and cline_cursor_mcp.exists():
+        results[-1] = config_doctor(cline_cursor_mcp, "mcpServers", "cline")
     return {
         "server_name": SERVER_NAME,
         "local_server": local_server_doctor(),

@@ -2,6 +2,7 @@ import unittest
 import tempfile
 import json
 from pathlib import Path
+from unittest import mock
 
 import agentmemory.clients as agentmemory_clients
 
@@ -51,6 +52,77 @@ class AgentMemoryClientsTests(unittest.TestCase):
             self.assertTrue(payload["configured"])
             self.assertEqual(payload["health"], "configured")
             self.assertFalse(payload["stale_launcher"])
+
+    def test_windows_client_paths_use_appdata_roaming(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            appdata = Path(tmp) / "AppData" / "Roaming"
+            with (
+                mock.patch.object(agentmemory_clients.sys, "platform", "win32"),
+                mock.patch.dict(agentmemory_clients.os.environ, {"APPDATA": str(appdata)}, clear=False),
+            ):
+                self.assertEqual(
+                    agentmemory_clients.claude_desktop_config_path(),
+                    appdata / "Claude" / "claude_desktop_config.json",
+                )
+                self.assertEqual(
+                    agentmemory_clients.vscode_mcp_path(),
+                    appdata / "Code" / "User" / "mcp.json",
+                )
+                self.assertEqual(
+                    agentmemory_clients.roo_mcp_path(),
+                    appdata / "Code" / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json",
+                )
+
+    def test_macos_client_paths_use_application_support(self) -> None:
+        home = Path("/Users/tester")
+        with (
+            mock.patch.object(agentmemory_clients.sys, "platform", "darwin"),
+            mock.patch.object(agentmemory_clients.Path, "home", return_value=home),
+        ):
+            self.assertEqual(
+                agentmemory_clients.claude_desktop_config_path(),
+                home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json",
+            )
+            self.assertEqual(
+                agentmemory_clients.vscode_mcp_path(),
+                home / "Library" / "Application Support" / "Code" / "User" / "mcp.json",
+            )
+            self.assertEqual(
+                agentmemory_clients.cline_cursor_mcp_path(),
+                home / "Library" / "Application Support" / "Cursor" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "mcp_settings.json",
+            )
+
+    def test_linux_client_paths_use_xdg_config_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            xdg = Path(tmp) / "xdg"
+            with (
+                mock.patch.object(agentmemory_clients.sys, "platform", "linux"),
+                mock.patch.dict(agentmemory_clients.os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
+            ):
+                self.assertEqual(
+                    agentmemory_clients.claude_desktop_config_path(),
+                    xdg / "Claude" / "claude_desktop_config.json",
+                )
+                self.assertEqual(
+                    agentmemory_clients.vscode_mcp_path(),
+                    xdg / "Code" / "User" / "mcp.json",
+                )
+                self.assertEqual(
+                    agentmemory_clients.kilo_mcp_path(),
+                    xdg / "Code" / "User" / "globalStorage" / "kilocode.kilo-code" / "settings" / "mcp_settings.json",
+                )
+
+    def test_linux_claude_desktop_path_prefers_existing_lowercase_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            xdg = Path(tmp) / "xdg"
+            fallback = xdg / "claude" / "claude_desktop_config.json"
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+            fallback.write_text("{}", encoding="utf-8")
+            with (
+                mock.patch.object(agentmemory_clients.sys, "platform", "linux"),
+                mock.patch.dict(agentmemory_clients.os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
+            ):
+                self.assertEqual(agentmemory_clients.claude_desktop_config_path(), fallback)
 
 
 if __name__ == "__main__":
