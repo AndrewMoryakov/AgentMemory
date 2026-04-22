@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { api } from "@/api/client";
+import { api, clearStoredToken, isTokenManaged } from "@/api/client";
 import { useRecordsStore } from "@/stores/records";
 
 const records = useRecordsStore();
@@ -22,6 +22,11 @@ async function poll() {
     healthy.value = false;
     lastError.value = (exc as Error).message;
   }
+}
+
+function signOut() {
+  clearStoredToken();
+  window.location.reload();
 }
 
 onMounted(() => {
@@ -52,6 +57,14 @@ onUnmounted(() => {
     </div>
     <div class="flex items-center gap-4">
       <span v-if="lastError" class="text-danger">{{ lastError }}</span>
+      <button
+        v-if="isTokenManaged"
+        class="hover:text-ink"
+        title="Clear stored token and re-authenticate"
+        @click="signOut"
+      >
+        sign out
+      </button>
       <router-link to="/me" class="hover:text-ink">/me</router-link>
     </div>
   </footer>

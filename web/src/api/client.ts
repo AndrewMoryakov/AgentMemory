@@ -25,6 +25,57 @@ interface RequestOptions extends Omit<RequestInit, "body"> {
   query?: Record<string, string | number | boolean | undefined | null>;
 }
 
+// ── Client-side bearer token (production) ─────────────────────
+//
+// In dev the Vite proxy injects Authorization from AGENTMEMORY_API_TOKEN
+// in process.env, so the SPA doesn't need its own token and we skip the
+// prompt to keep HMR dev ergonomic. In prod the SPA talks to Traefik
+// directly and has to present the bearer itself — stored in localStorage
+// after a one-time window.prompt(). On 401 we clear it and re-prompt.
+
+const TOKEN_KEY = "agentmemory.token";
+const USE_CLIENT_TOKEN = !import.meta.env.DEV;
+
+export function getStoredToken(): string {
+  if (typeof localStorage === "undefined") return "";
+  return localStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+export function setStoredToken(value: string): void {
+  if (typeof localStorage === "undefined") return;
+  if (value) localStorage.setItem(TOKEN_KEY, value);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+export function clearStoredToken(): void {
+  setStoredToken("");
+}
+
+export const isTokenManaged = USE_CLIENT_TOKEN;
+
+function promptForToken(reason: string): string {
+  // window.prompt is synchronous — good enough as a "simplest alert".
+  const input = window.prompt(
+    `${reason}\n\nPaste AGENTMEMORY_API_TOKEN (bearer):`,
+    "",
+  );
+  if (input === null) {
+    throw new ApiError("Authentication cancelled.", 401, null);
+  }
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new ApiError("Empty token.", 401, null);
+  }
+  setStoredToken(trimmed);
+  return trimmed;
+}
+
+function ensureToken(): string {
+  const existing = getStoredToken();
+  if (existing) return existing;
+  return promptForToken("AgentMemory needs an access token to continue.");
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { body, query, headers, ...rest } = options;
 
@@ -39,15 +90,33 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     if (qs) url += `?${qs}`;
   }
 
-  const response = await fetch(url, {
-    ...rest,
-    headers: {
+  function buildHeaders(token: string | null): Record<string, string> {
+    const out: Record<string, string> = {
       Accept: "application/json",
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(headers ?? {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+      ...((headers as Record<string, string> | undefined) ?? {}),
+    };
+    if (token) out.Authorization = `Bearer ${token}`;
+    return out;
+  }
+
+  const doFetch = (token: string | null) =>
+    fetch(url, {
+      ...rest,
+      headers: buildHeaders(token),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+
+  let token = USE_CLIENT_TOKEN ? ensureToken() : null;
+  let response = await doFetch(token);
+
+  if (USE_CLIENT_TOKEN && response.status === 401) {
+    clearStoredToken();
+    token = promptForToken(
+      "Access denied. The stored token was rejected — paste a fresh one.",
+    );
+    response = await doFetch(token);
+  }
 
   const text = await response.text();
   let payload: unknown = null;
