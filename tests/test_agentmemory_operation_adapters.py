@@ -55,6 +55,13 @@ class AgentMemoryOperationAdaptersTests(unittest.TestCase):
 
         self.assertEqual(source, {"limit": 25, "kind": "user", "query": "def"})
 
+    def test_cli_operation_source_builds_export_payload(self) -> None:
+        args = argparse.Namespace(path="memories.jsonl")
+
+        source = cli_operation_source("export", args, parse_json_arg=lambda raw: raw)
+
+        self.assertEqual(source, {"path": "memories.jsonl"})
+
     def test_mcp_operation_source_builds_add_messages_from_text(self) -> None:
         source = mcp_operation_source("memory_add", {"text": "hello", "user_id": "u1"})
 

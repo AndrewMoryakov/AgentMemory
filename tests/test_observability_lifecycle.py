@@ -46,6 +46,7 @@ class MetricsRegistryTests(unittest.TestCase):
         registry.record_operation(
             name="add", status="error", duration_seconds=0.05, error_type="ProviderScopeRequiredError"
         )
+        registry.record_event(name="memory_add.dedup_hit")
 
         summary = registry.summary()
         self.assertEqual(summary["operations"]["search"]["ok"], 2)
@@ -53,10 +54,12 @@ class MetricsRegistryTests(unittest.TestCase):
         self.assertGreater(summary["operations"]["search"]["latency_avg_ms"], 100)
         self.assertEqual(summary["operations"]["add"]["ok"], 0)
         self.assertEqual(summary["operations"]["add"]["errors"], 1)
+        self.assertEqual(summary["events"]["memory_add.dedup_hit"], 1)
 
         prom = registry.prometheus_text()
         self.assertIn('agentmemory_operation_ok_total{operation="search"} 2', prom)
         self.assertIn('agentmemory_operation_error_total{operation="add",error_type="ProviderScopeRequiredError"} 1', prom)
+        self.assertIn('agentmemory_event_total{event="memory_add.dedup_hit"} 1', prom)
         self.assertIn("agentmemory_operation_latency_seconds_bucket", prom)
 
     def test_record_llm_usage_computes_cost_for_known_model(self) -> None:
@@ -237,6 +240,61 @@ class LifecycleTTLTests(unittest.TestCase):
 
 
 class LifecycleDedupTests(unittest.TestCase):
+    def test_dedup_hit_records_auxiliary_metric_without_insert(self) -> None:
+        existing = {
+            "id": "existing-id",
+            "memory": "User deploys AgentMemory via Traefik on andrewm.ru",
+            "score": 0.97,
+            "provider": "mem0",
+            "user_id": "u1",
+        }
+        registry = metrics_module._MetricsRegistry()
+
+        with mock.patch.object(metrics_module, "_REGISTRY", registry), \
+             mock.patch.object(agentmemory_operations, "memory_search", lambda **_: [existing]), \
+             mock.patch.object(agentmemory_operations, "memory_add", lambda **_: self.fail("insert should not run")), \
+             mock.patch.object(agentmemory_operations, "should_proxy_to_api", lambda: False), \
+             mock.patch.object(agentmemory_operations, "active_provider_name", lambda: "mem0"), \
+             mock.patch.object(agentmemory_operations, "active_provider_capabilities", lambda: _caps()):
+            result = agentmemory_operations.OPERATIONS["add"].execute({
+                "messages": [{"role": "user", "content": "User deploys AgentMemory via Traefik"}],
+                "text": "User deploys AgentMemory via Traefik",
+                "user_id": "u1",
+                "dedup": True,
+            })
+
+        self.assertEqual(result["id"], "existing-id")
+        summary = registry.summary()
+        self.assertEqual(summary["operations"]["add"]["ok"], 1)
+        self.assertEqual(summary["events"]["memory_add.dedup_hit"], 1)
+        self.assertNotIn("memory_add.inserted", summary["events"])
+
+    def test_dedup_probe_failure_records_warning_and_auxiliary_metric(self) -> None:
+        registry = metrics_module._MetricsRegistry()
+
+        def fake_memory_add(**_kwargs):
+            return {"id": "new", "memory": "new text", "provider": "fake"}
+
+        with mock.patch.object(metrics_module, "_REGISTRY", registry), \
+             mock.patch.object(agentmemory_operations, "memory_search", side_effect=RuntimeError("search broke")), \
+             mock.patch.object(agentmemory_operations, "memory_add", fake_memory_add), \
+             mock.patch.object(agentmemory_operations, "should_proxy_to_api", lambda: False), \
+             mock.patch.object(agentmemory_operations, "active_provider_name", lambda: "mem0"), \
+             mock.patch.object(agentmemory_operations, "active_provider_capabilities", lambda: _caps()), \
+             self.assertLogs(agentmemory_operations.LOGGER, level="WARNING") as logs:
+            result = agentmemory_operations.OPERATIONS["add"].execute({
+                "messages": [{"role": "user", "content": "new text"}],
+                "text": "new text",
+                "user_id": "u1",
+                "dedup": True,
+            })
+
+        self.assertEqual(result["id"], "new")
+        summary = registry.summary()
+        self.assertEqual(summary["events"]["memory_add.dedup_probe_failed"], 1)
+        self.assertEqual(summary["events"]["memory_add.inserted"], 1)
+        self.assertTrue(any("memory_add dedup probe failed" in line for line in logs.output))
+
     def test_dedup_hit_returns_existing_record(self) -> None:
         existing = {
             "id": "existing-id",

@@ -26,6 +26,10 @@ def cli_operation_source(
             "kind": args.kind,
             "query": args.query,
         }
+    if command == "export":
+        return {"path": args.path}
+    if command == "import":
+        return {"path": args.path}
     if command == "add":
         return {
             "messages": [{"role": "user", "content": text} for text in args.message],

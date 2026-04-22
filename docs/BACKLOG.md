@@ -120,19 +120,28 @@ Format per entry:
   the storage layer.
 
 - **Where:** new `agentmemory/runtime/portability.py` + MCP tools
-  `memory_export` / `memory_import` + CLI wrappers.
+  `memory_export` / `memory_import` + CLI wrappers
+  `agentmemory export-memories` / `agentmemory import-memories`.
 
-- **Fix outline:** reuse `list_scopes` + per-scope `list_memories`. Export
-  format: one JSON object per line with `id`, `memory`, `metadata`, scope
-  fields, timestamps. Import: stream the file, batch-add via current
-  `memory_add` path. `infer=false` on import to guarantee round-trip fidelity.
-  Metadata gets a `source: "import"` tag for provenance.
+- **Fix:** `agentmemory/runtime/portability.py` now exports canonical
+  `MemoryRecord` JSONL by walking `list_scopes` plus per-scope `list_memories`
+  and deduplicating by memory id. Providers that support scopeless list also
+  get a final scopeless pass. Import streams the JSONL file and replays each
+  row through the current `memory_add` path with `infer=false`, preserving
+  scope fields and `memory_type` while tagging metadata with
+  `source: "import"` plus import provenance fields. The implementation
+  explicitly fails closed if scope inventory or per-scope list hits the current
+  fixed export limit, so the first version cannot silently truncate data while
+  providers still lack pagination. Coverage lives in
+  `tests/test_agentmemory_portability.py`, `tests/test_agentmemory_mcp_server.py`,
+  `tests/test_agentmemory_operation_adapters.py`,
+  `tests/test_provider_contract_v1.py`, and `tests/test_agentmemory_core.py`.
 
 ---
 
 ## 5. Re-enable `infer=true` with observable rewrites — or commit to "never"
 
-- **Status:** open
+- **Status:** closed
 - **Severity:** hygiene (decision, not a bug)
 - **Why:** DEFECT-04 was closed by flipping the default to `infer=false`. The
   mechanism for `infer=true` still works and returns `transformed`,
@@ -426,7 +435,7 @@ Format per entry:
 
 ## 19. Client-registration paths hardcode Windows `AppData/Roaming`
 
-- **Status:** open
+- **Status:** closed
 - **Severity:** bug (cross-platform correctness)
 - **Why:** `agentmemory/clients.py` defines `CLAUDE_DESKTOP_CONFIG`,
   `VSCODE_MCP`, `ROO_MCP`, `KILO_MCP`, `CLINE_*_MCP` as
@@ -521,7 +530,7 @@ Format per entry:
 
 ## 23. `memory_add` metric counts dedup hits as inserts
 
-- **Status:** open
+- **Status:** closed
 - **Severity:** hygiene (observability correctness)
 - **Why:** `OperationSpec.__post_init__` wraps `execute` with
   `metrics_registry.timed(name)`. `_execute_add` returns a pre-existing
@@ -535,11 +544,15 @@ Format per entry:
 - **Where:** `agentmemory/runtime/operations.py` — `_maybe_dedup_existing`
   (L107–123) and `_execute_add` (L137–140).
 
-- **Fix outline:** introduce counters
-  `memory_add.dedup_hit`, `memory_add.inserted`,
-  `memory_add.dedup_probe_failed`. Keep `memory_add.ok` as a sum for
-  back-compat. Log a `warn` line with `error_type` when the dedup
-  probe raises, so silent failure becomes discoverable.
+- **Fix:** `agentmemory/runtime/operations.py` now records explicit auxiliary
+  events `memory_add.dedup_hit`, `memory_add.inserted`, and
+  `memory_add.dedup_probe_failed` through the metrics registry. The original
+  `memory_add.ok` counter is retained for back-compat, but callers can now
+  distinguish true inserts from dedup returns. Dedup probe failures also emit
+  a warning log with traceback instead of failing silently. Summary and
+  Prometheus output now expose the auxiliary event counters, and
+  `tests/test_observability_lifecycle.py` covers dedup-hit and probe-failure
+  paths.
 
 ---
 

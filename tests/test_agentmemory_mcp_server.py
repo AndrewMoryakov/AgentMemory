@@ -31,6 +31,8 @@ class AgentMemoryMcpServerTests(unittest.TestCase):
         tool_names = [tool["name"] for tool in response["result"]["tools"]]
         self.assertIn("memory_health", tool_names)
         self.assertIn("memory_list_scopes", tool_names)
+        self.assertIn("memory_export", tool_names)
+        self.assertIn("memory_import", tool_names)
 
     def test_unknown_tool_returns_jsonrpc_error(self) -> None:
         response = agentmemory_mcp_server.handle_request(
@@ -256,6 +258,33 @@ class AgentMemoryMcpServerTests(unittest.TestCase):
         result = response["result"]
         self.assertFalse(result["isError"])
         self.assertEqual(result["structuredContent"]["provider"], "demo")
+
+    def test_export_call_returns_structured_success_payload(self) -> None:
+        original_spec = agentmemory_mcp_server.OPERATIONS_BY_MCP_NAME["memory_export"]
+        try:
+            agentmemory_mcp_server.OPERATIONS_BY_MCP_NAME["memory_export"] = agentmemory_operations.OperationSpec(
+                name="export",
+                mcp_name="memory_export",
+                title="Export Memories",
+                description="Export memories.",
+                input_schema=original_spec.input_schema,
+                execute=lambda source: {"path": source["path"], "format": "jsonl"},
+            )
+            response = agentmemory_mcp_server.handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {"name": "memory_export", "arguments": {"path": "memories.jsonl"}},
+                }
+            )
+        finally:
+            agentmemory_mcp_server.OPERATIONS_BY_MCP_NAME["memory_export"] = original_spec
+
+        self.assertIsNotNone(response)
+        result = response["result"]
+        self.assertFalse(result["isError"])
+        self.assertEqual(result["structuredContent"]["path"], "memories.jsonl")
 
 
 if __name__ == "__main__":

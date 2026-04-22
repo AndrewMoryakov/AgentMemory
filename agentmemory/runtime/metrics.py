@@ -101,6 +101,7 @@ class _MetricsRegistry:
         self._op_ok: dict[str, int] = {}
         self._op_err: dict[tuple[str, str], int] = {}
         self._op_latency: dict[str, _Histogram] = {}
+        self._event_counts: dict[str, int] = {}
         self._model_tokens_prompt: dict[str, int] = {}
         self._model_tokens_completion: dict[str, int] = {}
         self._started_at = time.time()
@@ -114,6 +115,10 @@ class _MetricsRegistry:
                 self._op_err[key] = self._op_err.get(key, 0) + 1
             histogram = self._op_latency.setdefault(name, _Histogram())
             histogram.observe(max(duration_seconds, 0.0))
+
+    def record_event(self, *, name: str) -> None:
+        with self._lock:
+            self._event_counts[name] = self._event_counts.get(name, 0) + 1
 
     def record_llm_usage(self, *, model: str, prompt_tokens: int, completion_tokens: int) -> None:
         if not model:
@@ -151,6 +156,10 @@ class _MetricsRegistry:
         with self._lock:
             return dict(self._op_err)
 
+    def events_snapshot(self) -> dict[str, int]:
+        with self._lock:
+            return dict(self._event_counts)
+
     def usage_snapshot(self) -> dict[str, _UsageSnapshot]:
         with self._lock:
             models = set(self._model_tokens_prompt) | set(self._model_tokens_completion)
@@ -169,6 +178,7 @@ class _MetricsRegistry:
 
     def summary(self) -> dict[str, Any]:
         ops = self.operations_snapshot()
+        events = self.events_snapshot()
         usage = self.usage_snapshot()
         total_cost = sum(u.estimated_cost_usd for u in usage.values())
         return {
@@ -187,6 +197,7 @@ class _MetricsRegistry:
                 }
                 for name, snap in sorted(ops.items())
             },
+            "events": {name: count for name, count in sorted(events.items())},
             "usage": {
                 model: {
                     "prompt_tokens": snap.prompt_tokens,
@@ -206,6 +217,7 @@ class _MetricsRegistry:
         lines: list[str] = []
         ops = self.operations_snapshot()
         errors = self.errors_snapshot()
+        events = self.events_snapshot()
 
         lines.append("# HELP agentmemory_operation_ok_total Number of successful operations.")
         lines.append("# TYPE agentmemory_operation_ok_total counter")
@@ -218,6 +230,11 @@ class _MetricsRegistry:
             lines.append(
                 f'agentmemory_operation_error_total{{operation="{_esc(name)}",error_type="{_esc(error_type)}"}} {count}'
             )
+
+        lines.append("# HELP agentmemory_event_total Auxiliary event counters.")
+        lines.append("# TYPE agentmemory_event_total counter")
+        for name, count in sorted(events.items()):
+            lines.append(f'agentmemory_event_total{{event="{_esc(name)}"}} {count}')
 
         lines.append("# HELP agentmemory_operation_latency_seconds Operation latency histogram.")
         lines.append("# TYPE agentmemory_operation_latency_seconds histogram")
@@ -290,6 +307,10 @@ def record_operation(*, name: str, status: str, duration_seconds: float, error_t
     _REGISTRY.record_operation(
         name=name, status=status, duration_seconds=duration_seconds, error_type=error_type
     )
+
+
+def record_event(*, name: str) -> None:
+    _REGISTRY.record_event(name=name)
 
 
 def record_llm_usage(*, model: str, prompt_tokens: int, completion_tokens: int) -> None:

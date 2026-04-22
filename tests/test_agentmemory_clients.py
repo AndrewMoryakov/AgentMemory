@@ -124,6 +124,20 @@ class AgentMemoryClientsTests(unittest.TestCase):
             ):
                 self.assertEqual(agentmemory_clients.claude_desktop_config_path(), fallback)
 
+    def test_client_path_overrides_take_precedence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            custom = Path(tmp) / "custom" / "claude.json"
+            with mock.patch.dict(
+                agentmemory_clients.os.environ,
+                {
+                    "AGENTMEMORY_CLAUDE_DESKTOP_CONFIG": str(custom),
+                    "AGENTMEMORY_VSCODE_MCP_CONFIG": str(custom.with_name("vscode.json")),
+                },
+                clear=False,
+            ):
+                self.assertEqual(agentmemory_clients.claude_desktop_config_path(), custom)
+                self.assertEqual(agentmemory_clients.vscode_mcp_path(), custom.with_name("vscode.json"))
+
 
 if __name__ == "__main__":
     unittest.main()

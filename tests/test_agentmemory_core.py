@@ -117,6 +117,64 @@ class AgentMemoryCoreTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("Rebuilt scope registry for provider 'mem0'", buffer.getvalue())
 
+    def test_command_export_memories_invokes_ops_cli_export(self) -> None:
+        original_run = agentmemory.run
+        original_stdout = agentmemory.sys.stdout
+        buffer = StringIO()
+        captured: dict[str, object] = {}
+
+        class FakeCompleted:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self.stdout = '{"exported": 2}'
+                self.stderr = ""
+
+        try:
+            def fake_run(command, **kwargs):
+                captured["command"] = list(command)
+                return FakeCompleted()
+
+            agentmemory.run = fake_run  # type: ignore[assignment]
+            agentmemory.sys.stdout = buffer
+            rc = agentmemory.command_export_memories(argparse.Namespace(path="memories.jsonl"))
+        finally:
+            agentmemory.run = original_run  # type: ignore[assignment]
+            agentmemory.sys.stdout = original_stdout
+
+        self.assertEqual(rc, 0)
+        self.assertIn("export", captured["command"])
+        self.assertIn("memories.jsonl", captured["command"])
+        self.assertIn('"exported": 2', buffer.getvalue())
+
+    def test_command_import_memories_invokes_ops_cli_import(self) -> None:
+        original_run = agentmemory.run
+        original_stdout = agentmemory.sys.stdout
+        buffer = StringIO()
+        captured: dict[str, object] = {}
+
+        class FakeCompleted:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self.stdout = '{"imported": 2}'
+                self.stderr = ""
+
+        try:
+            def fake_run(command, **kwargs):
+                captured["command"] = list(command)
+                return FakeCompleted()
+
+            agentmemory.run = fake_run  # type: ignore[assignment]
+            agentmemory.sys.stdout = buffer
+            rc = agentmemory.command_import_memories(argparse.Namespace(path="memories.jsonl"))
+        finally:
+            agentmemory.run = original_run  # type: ignore[assignment]
+            agentmemory.sys.stdout = original_stdout
+
+        self.assertEqual(rc, 0)
+        self.assertIn("import", captured["command"])
+        self.assertIn("memories.jsonl", captured["command"])
+        self.assertIn('"imported": 2', buffer.getvalue())
+
     def test_resolve_api_start_port_returns_requested_port_when_free(self) -> None:
         original_can_bind_api_port = agentmemory.can_bind_api_port
         try:

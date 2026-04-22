@@ -148,6 +148,37 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
         self.assertEqual(payload["error_type"], "ProviderValidationError")
         self.assertIn("Invalid JSON", payload["message"])
 
+    def test_cli_export_prints_structured_success_payload(self) -> None:
+        original_argv = sys.argv
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        original_spec = agentmemory_operations.OPERATIONS["export"]
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        try:
+            sys.argv = ["agentmemory_cli.py", "export", "memories.jsonl"]
+            sys.stdout = stdout_buffer
+            sys.stderr = stderr_buffer
+            agentmemory_operations.OPERATIONS["export"] = original_spec.__class__(
+                name="export",
+                mcp_name="memory_export",
+                title="Export Memories",
+                description="Export memories.",
+                input_schema=original_spec.input_schema,
+                execute=lambda source: {"path": source["path"], "exported": 2},
+            )
+            rc = agentmemory_cli.main()
+        finally:
+            sys.argv = original_argv
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            agentmemory_operations.OPERATIONS["export"] = original_spec
+
+        self.assertEqual(rc, 0)
+        payload = json.loads(stdout_buffer.getvalue())
+        self.assertEqual(payload["path"], "memories.jsonl")
+        self.assertEqual(payload["exported"], 2)
+
     def test_cli_search_rejects_missing_required_scope_before_provider_call(self) -> None:
         original_argv = sys.argv
         original_stdout = sys.stdout

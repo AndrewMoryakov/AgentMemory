@@ -31,6 +31,12 @@ def main() -> int:
     list_scopes_parser.add_argument("--kind", choices=["user", "agent", "run"])
     list_scopes_parser.add_argument("--query")
 
+    export_parser = subparsers.add_parser("export")
+    export_parser.add_argument("path")
+
+    import_parser = subparsers.add_parser("import")
+    import_parser.add_argument("path")
+
     add_parser = subparsers.add_parser("add")
     add_parser.add_argument("--user-id")
     add_parser.add_argument("--agent-id")
@@ -81,6 +87,14 @@ def main() -> int:
             return 0
         if args.command == "list-scopes":
             result = OPERATIONS["list_scopes"].execute(cli_operation_source("list-scopes", args, parse_json_arg=parse_metadata))
+            print_json(result)
+            return 0
+        if args.command == "export":
+            result = OPERATIONS["export"].execute(cli_operation_source("export", args, parse_json_arg=parse_metadata))
+            print_json(result)
+            return 0
+        if args.command == "import":
+            result = OPERATIONS["import"].execute(cli_operation_source("import", args, parse_json_arg=parse_metadata))
             print_json(result)
             return 0
         if args.command == "search":

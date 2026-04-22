@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -28,8 +29,11 @@ from agentmemory.runtime.config import (
 )
 from agentmemory.runtime import lifecycle as lifecycle_module
 from agentmemory.runtime import metrics as metrics_registry
+from agentmemory.runtime import portability as portability_module
 from agentmemory.runtime.transport import execute_transport_operation, validate_and_build_list_kwargs, validate_and_build_search_kwargs
 from agentmemory.providers.base import MemoryNotFoundError
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -120,7 +124,13 @@ def _maybe_dedup_existing(source: dict[str, Any]) -> dict[str, Any] | None:
             local_call=lambda: memory_search(**kwargs),
             proxy_call=lambda: proxy_search(**kwargs),
         )
-    except Exception:
+    except Exception as exc:
+        metrics_registry.record_event(name="memory_add.dedup_probe_failed")
+        LOGGER.warning(
+            "memory_add dedup probe failed",
+            extra={"error_type": exc.__class__.__name__},
+            exc_info=True,
+        )
         return None
     if not isinstance(hits, list):
         return None
@@ -138,6 +148,7 @@ def _maybe_dedup_existing(source: dict[str, Any]) -> dict[str, Any] | None:
 def _execute_add(source: dict[str, Any]) -> Any:
     deduped = _maybe_dedup_existing(source)
     if deduped is not None:
+        metrics_registry.record_event(name="memory_add.dedup_hit")
         return deduped
 
     infer_requested = bool(source.get("infer", False))
@@ -159,6 +170,7 @@ def _execute_add(source: dict[str, Any]) -> Any:
         local_call=lambda: memory_add(**kwargs),
         proxy_call=lambda: proxy_add(**kwargs),
     )
+    metrics_registry.record_event(name="memory_add.inserted")
     if infer_requested and isinstance(result, dict):
         original = _original_input_text(source)
         stored = result.get("memory")
@@ -182,6 +194,14 @@ def _execute_list_scopes(source: dict[str, Any]) -> Any:
         local_call=lambda: memory_list_scopes(**kwargs),
         proxy_call=lambda: proxy_list_scopes(**kwargs),
     )
+
+
+def _execute_export(source: dict[str, Any]) -> Any:
+    return portability_module.export_memories(path=source["path"])
+
+
+def _execute_import(source: dict[str, Any]) -> Any:
+    return portability_module.import_memories(path=source["path"])
 
 
 def _filter_unexpired_with_limit_refill(
@@ -373,6 +393,43 @@ OPERATIONS: dict[str, OperationSpec] = {
             "additionalProperties": False,
         },
         execute=_execute_list_scopes,
+    ),
+    "export": OperationSpec(
+        name="export",
+        mcp_name="memory_export",
+        title="Export Memories",
+        description=(
+            "Export memories to a provider-neutral JSONL file on the current machine. "
+            "The operation walks scope inventory and writes canonical memory records; "
+            "the path is resolved on the process executing the tool."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        execute=_execute_export,
+    ),
+    "import": OperationSpec(
+        name="import",
+        mcp_name="memory_import",
+        title="Import Memories",
+        description=(
+            "Import memories from a provider-neutral JSONL file on the current machine. "
+            "Records are replayed through memory_add with infer=false for round-trip fidelity."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        execute=_execute_import,
     ),
     "search": OperationSpec(
         name="search",

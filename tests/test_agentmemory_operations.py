@@ -8,7 +8,7 @@ class AgentMemoryOperationsTests(unittest.TestCase):
     def test_registry_contains_expected_core_operations(self) -> None:
         self.assertEqual(
             set(agentmemory_operations.OPERATIONS.keys()),
-            {"health", "add", "list_scopes", "search", "list", "get", "update", "delete"},
+            {"health", "add", "list_scopes", "export", "import", "search", "list", "get", "update", "delete"},
         )
 
     def test_mcp_tools_are_derived_from_operation_registry(self) -> None:
@@ -46,6 +46,13 @@ class AgentMemoryOperationsTests(unittest.TestCase):
         self.assertIn("limit", schema["properties"])
         self.assertIn("kind", schema["properties"])
         self.assertIn("query", schema["properties"])
+
+    def test_export_and_import_operation_schema_require_path(self) -> None:
+        export_schema = agentmemory_operations.OPERATIONS["export"].input_schema
+        import_schema = agentmemory_operations.OPERATIONS["import"].input_schema
+
+        self.assertEqual(export_schema["required"], ["path"])
+        self.assertEqual(import_schema["required"], ["path"])
 
 
 if __name__ == "__main__":

@@ -46,7 +46,15 @@ def _roaming_config_root() -> Path:
     return Path.home() / ".config"
 
 
+def _override_path(env_name: str) -> Path | None:
+    raw = os.environ.get(env_name, "").strip()
+    return Path(raw).expanduser() if raw else None
+
+
 def claude_desktop_config_path() -> Path:
+    override = _override_path("AGENTMEMORY_CLAUDE_DESKTOP_CONFIG")
+    if override is not None:
+        return override
     root = _roaming_config_root()
     if _platform_name() == "linux":
         primary = root / "Claude" / "claude_desktop_config.json"
@@ -56,22 +64,37 @@ def claude_desktop_config_path() -> Path:
 
 
 def vscode_mcp_path() -> Path:
+    override = _override_path("AGENTMEMORY_VSCODE_MCP_CONFIG")
+    if override is not None:
+        return override
     return _roaming_config_root() / "Code" / "User" / "mcp.json"
 
 
 def roo_mcp_path() -> Path:
+    override = _override_path("AGENTMEMORY_ROO_MCP_CONFIG")
+    if override is not None:
+        return override
     return _roaming_config_root() / "Code" / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json"
 
 
 def kilo_mcp_path() -> Path:
+    override = _override_path("AGENTMEMORY_KILO_MCP_CONFIG")
+    if override is not None:
+        return override
     return _roaming_config_root() / "Code" / "User" / "globalStorage" / "kilocode.kilo-code" / "settings" / "mcp_settings.json"
 
 
 def cline_vscode_mcp_path() -> Path:
+    override = _override_path("AGENTMEMORY_CLINE_VSCODE_MCP_CONFIG")
+    if override is not None:
+        return override
     return _roaming_config_root() / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "mcp_settings.json"
 
 
 def cline_cursor_mcp_path() -> Path:
+    override = _override_path("AGENTMEMORY_CLINE_CURSOR_MCP_CONFIG")
+    if override is not None:
+        return override
     return _roaming_config_root() / "Cursor" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "mcp_settings.json"
 
 
