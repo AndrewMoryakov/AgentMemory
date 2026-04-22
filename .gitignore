@@ -15,3 +15,5 @@ dist/
 build/
 *.egg-info/
 data/
+web/node_modules/
+web/dist/

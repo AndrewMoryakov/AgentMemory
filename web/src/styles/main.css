@@ -1,0 +1,232 @@
+@import "./tokens.css";
+@import "tailwindcss";
+
+@theme {
+  --color-bg: var(--bg);
+  --color-bg-raised: var(--bg-raised);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-active: var(--surface-active);
+  --color-surface-sunken: var(--surface-sunken);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-line-subtle: var(--line-subtle);
+
+  --color-ink: var(--ink);
+  --color-ink-strong: var(--ink-strong);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --color-accent-50:  var(--accent-50);
+  --color-accent-100: var(--accent-100);
+  --color-accent-200: var(--accent-200);
+  --color-accent-300: var(--accent-300);
+  --color-accent-400: var(--accent-400);
+  --color-accent-500: var(--accent-500);
+  --color-accent-600: var(--accent-600);
+  --color-accent-700: var(--accent-700);
+  --color-accent-800: var(--accent-800);
+  --color-accent-900: var(--accent-900);
+  --color-accent-contrast: var(--accent-contrast);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--accent-tint);
+  color: var(--ink-strong);
+}
+
+button {
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+  border-radius: var(--radius-xs);
+}
+
+/* ── Motion ───────────────────────────────────────────────── */
+
+/* Modal backdrop: simple fade. */
+.overlay-enter-active,
+.overlay-leave-active {
+  transition: opacity var(--motion-base) var(--ease-out);
+}
+.overlay-enter-from,
+.overlay-leave-to {
+  opacity: 0;
+}
+
+/* Modal panel: rise + scale-in, exit faster. */
+.panel-enter-active {
+  transition:
+    opacity var(--motion-base) var(--ease-out),
+    transform var(--motion-base) var(--ease-out);
+}
+.panel-leave-active {
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+.panel-enter-from,
+.panel-leave-to {
+  opacity: 0;
+  transform: translateY(6px) scale(0.985);
+}
+
+/* Bulk bar: collapse vertically so the rows below slide up smoothly. */
+.bulk-enter-active,
+.bulk-leave-active {
+  overflow: hidden;
+  transition:
+    max-height var(--motion-base) var(--ease-out),
+    opacity var(--motion-fast) var(--ease-out);
+}
+.bulk-enter-from,
+.bulk-leave-to {
+  max-height: 0;
+  opacity: 0;
+}
+.bulk-enter-to,
+.bulk-leave-from {
+  max-height: 60px;
+  opacity: 1;
+}
+
+/* Rail scope expand: grid-rows 0fr↔1fr trick for content-height anim. */
+.rail-expand-enter-active,
+.rail-expand-leave-active {
+  display: grid;
+  transition:
+    grid-template-rows var(--motion-base) var(--ease-out),
+    opacity var(--motion-fast) var(--ease-out);
+}
+.rail-expand-enter-from,
+.rail-expand-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+.rail-expand-enter-to,
+.rail-expand-leave-from {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.rail-expand-enter-active > *,
+.rail-expand-leave-active > * {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Main view crossfade (Table ↔ Timeline). */
+.view-fade-enter-active {
+  transition: opacity var(--motion-base) var(--ease-out);
+}
+.view-fade-leave-active {
+  transition: opacity var(--motion-fast) var(--ease-out);
+  position: absolute;
+  inset: 0;
+}
+.view-fade-enter-from,
+.view-fade-leave-to {
+  opacity: 0;
+}
+
+/* Inspector slide-in from the right. */
+.inspector-enter-active,
+.inspector-leave-active {
+  transition:
+    opacity var(--motion-base) var(--ease-out),
+    transform var(--motion-base) var(--ease-out);
+}
+.inspector-enter-from,
+.inspector-leave-to {
+  opacity: 0;
+  transform: translateX(12px);
+}
+
+/* Connected-dot pulse. */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(62, 207, 142, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(62, 207, 142, 0);
+  }
+}
+.pulse-dot {
+  animation: pulse-dot 2.4s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Scrollbars ───────────────────────────────────────────── */
+
+/* Thin, dark scrollbars that match the shell. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3a4048;
+  background-clip: content-box;
+}

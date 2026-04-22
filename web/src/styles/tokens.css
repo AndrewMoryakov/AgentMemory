@@ -1,0 +1,88 @@
+/*
+ * Design tokens.
+ *
+ * `--accent-*` is the only family that needs to change when swapping palettes.
+ * To add a new palette, set its `--accent-*` values under a `[data-theme="..."]`
+ * block below, then flip the `<html data-theme>` attribute.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg: #0b0d10;
+  --bg-raised: #111418;
+  --surface: #14171c;
+  --surface-hover: #181c22;
+  --surface-active: #1d222a;
+  --surface-sunken: #0d1015;
+
+  /* Borders and dividers */
+  --line: #23272e;
+  --line-strong: #2c313a;
+  --line-subtle: #1a1e24;
+
+  /* Ink (text) */
+  --ink: #e7eaee;
+  --ink-strong: #ffffff;
+  --ink-muted: #9aa1ab;
+  --ink-faint: #6b7280;
+
+  /* Semantic */
+  --success: #3ecf8e;
+  --warning: #f5a524;
+  --danger: #f25757;
+  --info: #5aa9ff;
+
+  /* Violet accent (default palette) */
+  --accent-50:  #f2efff;
+  --accent-100: #e4dcff;
+  --accent-200: #c8b9ff;
+  --accent-300: #a88fff;
+  --accent-400: #8b6bff;
+  --accent-500: #7c5cff;
+  --accent-600: #6a48ee;
+  --accent-700: #5838d0;
+  --accent-800: #4529a6;
+  --accent-900: #2f1c74;
+  --accent-contrast: #ffffff;
+  --accent-tint: rgba(124, 92, 255, 0.12);
+  --accent-ring: rgba(124, 92, 255, 0.35);
+
+  /* Radii */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Typography */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "Geist Mono", ui-monospace, "SF Mono", Consolas, monospace;
+
+  /* Motion */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 260ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/*
+ * Example alternative palette. Activate by adding data-theme="amber" to <html>.
+ * Kept here as a template for future palettes.
+ */
+[data-theme="amber"] {
+  --accent-50:  #fff7e6;
+  --accent-100: #ffe8b8;
+  --accent-200: #ffd37a;
+  --accent-300: #ffbb40;
+  --accent-400: #fba31a;
+  --accent-500: #e88a00;
+  --accent-600: #c96f00;
+  --accent-700: #a35600;
+  --accent-800: #7a3f00;
+  --accent-900: #4a2600;
+  --accent-contrast: #1a1200;
+  --accent-tint: rgba(232, 138, 0, 0.14);
+  --accent-ring: rgba(232, 138, 0, 0.35);
+}
