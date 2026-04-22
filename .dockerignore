@@ -13,3 +13,6 @@ dist
 .env
 agentmemory.config.json
 data
+web/node_modules
+web/dist
+web/.npmrc
