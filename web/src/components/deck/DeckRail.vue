@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { api } from "@/api/client";
 import type { ClientIntegration, ScopeKind, StatsTotals } from "@/api/types";
 import { useScopeStore } from "@/stores/scope";
 import { useScopesStore } from "@/stores/scopes";
 import { useRecordsStore } from "@/stores/records";
+import { useOpsStore } from "@/stores/ops";
+import Sparkline from "@/components/Sparkline.vue";
 
 const scope = useScopeStore();
 const scopes = useScopesStore();
 const records = useRecordsStore();
+const ops = useOpsStore();
 
 const totals = ref<StatsTotals>({});
 const clients = ref<ClientIntegration[]>([]);
@@ -28,7 +31,29 @@ async function load() {
 onMounted(() => {
   load();
   scopes.ensureLoaded();
+  ops.start();
 });
+
+onUnmounted(() => {
+  ops.stop();
+});
+
+function opSeries(name: string): number[] {
+  return ops.series[name] ?? [];
+}
+
+function opErrors(name: string): number {
+  return ops.snapshots[name]?.errors ?? 0;
+}
+
+function opP50(name: string): number | null {
+  const v = ops.snapshots[name]?.latency_p50_ms;
+  return typeof v === "number" ? v : null;
+}
+
+function opTotal(name: string): number {
+  return ops.snapshots[name]?.ok ?? 0;
+}
 
 const FIELD_BY_KIND: Record<ScopeKind, "user_id" | "agent_id" | "run_id"> = {
   user: "user_id",
@@ -194,6 +219,42 @@ function clearOne(kind: ScopeKind) {
           <div class="text-ink-strong">{{ totals.pinned ?? 0 }}</div>
         </div>
       </div>
+    </section>
+
+    <section>
+      <div class="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wider text-ink-faint">
+        <span>Ops (live)</span>
+        <span
+          class="h-1.5 w-1.5 rounded-full"
+          :class="ops.active ? 'bg-success pulse-dot' : 'bg-ink-faint'"
+          :title="ops.active ? 'Polling /admin/stats/operations' : 'Idle'"
+        />
+      </div>
+      <ul class="flex flex-col gap-0.5 font-mono text-[12px]">
+        <li
+          v-if="!ops.operationNames.length"
+          class="px-2 py-1 text-[11px] text-ink-faint"
+        >
+          No operations yet.
+        </li>
+        <li
+          v-for="name in ops.operationNames"
+          :key="name"
+          class="flex items-center gap-2 rounded-sm px-2 py-1"
+          :title="`${opTotal(name)} calls · ${opErrors(name)} errors${opP50(name) !== null ? ` · p50 ${opP50(name)}ms` : ''}`"
+        >
+          <span class="flex-1 truncate text-ink-muted">{{ name }}</span>
+          <Sparkline
+            :data="opSeries(name)"
+            :color="opErrors(name) > 0 ? 'var(--danger)' : 'var(--accent-500)'"
+            :width="56"
+            :height="12"
+          />
+          <span class="w-8 shrink-0 text-right text-[10px] text-ink-faint">
+            {{ opTotal(name) }}
+          </span>
+        </li>
+      </ul>
     </section>
 
     <section>

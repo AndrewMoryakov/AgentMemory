@@ -73,7 +73,7 @@ async function togglePinnedSelected() {
 function onKeydown(event: KeyboardEvent) {
   if (event.defaultPrevented) return;
   if (isEditableTarget(event.target)) return;
-  if (ui.palette || addOpen.value) return;
+  if (ui.palette || ui.help || addOpen.value) return;
 
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
     event.preventDefault();
@@ -142,6 +142,10 @@ function onKeydown(event: KeyboardEvent) {
     case "t":
       event.preventDefault();
       ui.toggleDeckView();
+      break;
+    case "i":
+      event.preventDefault();
+      ui.toggleInspector();
       break;
   }
 }
@@ -231,9 +235,17 @@ watch(
         </button>
         <button
           class="rounded-sm border border-line-strong bg-surface px-2 py-1 text-[12px] text-ink-muted hover:bg-surface-hover hover:text-ink"
-          @click="ui.inspectorOpen = !ui.inspectorOpen"
+          @click="ui.toggleInspector()"
         >
           {{ ui.inspectorOpen ? "Hide inspector" : "Show inspector" }}
+          <span class="ml-1.5 font-mono text-[10px] text-ink-faint">i</span>
+        </button>
+        <button
+          class="flex h-6 w-6 items-center justify-center rounded-sm border border-line-strong bg-surface font-mono text-[12px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+          title="Keyboard shortcuts (?)"
+          @click="ui.openHelp()"
+        >
+          ?
         </button>
       </div>
     </header>

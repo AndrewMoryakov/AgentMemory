@@ -15,6 +15,7 @@ export const useUiStore = defineStore("ui", () => {
   const palette = ref(false);
   const deckView = ref<DeckView>(loadDeckView());
   const inspectorOpen = ref(true);
+  const help = ref(false);
 
   watch(deckView, (value) => {
     if (typeof localStorage !== "undefined") {
@@ -37,15 +38,32 @@ export const useUiStore = defineStore("ui", () => {
   function toggleDeckView() {
     deckView.value = deckView.value === "table" ? "timeline" : "table";
   }
+  function openHelp() {
+    help.value = true;
+  }
+  function closeHelp() {
+    help.value = false;
+  }
+  function toggleHelp() {
+    help.value = !help.value;
+  }
+  function toggleInspector() {
+    inspectorOpen.value = !inspectorOpen.value;
+  }
 
   return {
     palette,
     deckView,
     inspectorOpen,
+    help,
     openPalette,
     closePalette,
     togglePalette,
     setDeckView,
     toggleDeckView,
+    openHelp,
+    closeHelp,
+    toggleHelp,
+    toggleInspector,
   };
 });
