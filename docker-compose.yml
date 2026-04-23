@@ -2,10 +2,11 @@ services:
   agentmemory:
     build: .
     ports:
-      - "${AGENTMEMORY_PUBLISHED_PORT:-8765}:8765"
+      - "${AGENTMEMORY_BIND_ADDR:-127.0.0.1}:${AGENTMEMORY_PUBLISHED_PORT:-8765}:8765"
     environment:
       AGENTMEMORY_API_HOST: "0.0.0.0"
       AGENTMEMORY_API_PORT: "8765"
+      AGENTMEMORY_API_TOKEN: "${AGENTMEMORY_API_TOKEN:?set AGENTMEMORY_API_TOKEN in .env}"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
     volumes:
       - ./data:/app/data
