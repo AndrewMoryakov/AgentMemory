@@ -190,7 +190,7 @@ flowchart TD
     A["Clients and Tools"] --> B["CLI / HTTP API / MCP / Browser UI"]
     B --> C["Shared Runtime Layer"]
     C --> D["Provider Contract"]
-    D --> E["Providers: mem0, localjson, future providers"]
+    D --> E["Providers: mem0, localjson, claude_memory, future providers"]
 ```
 
 Current runtime layers:
@@ -214,6 +214,7 @@ More detail:
 - Windows-first client integration workflow
 - `mem0` is the main semantic provider
 - `localjson` is the built-in testing and demo provider
+- `claude_memory` is the conservative file-backed adapter for Claude Code memory surfaces
 - provider contract, operation registry, transport adapters, and runtime policy are implemented
 - diagnostics and scope discovery are part of the current product surface
 

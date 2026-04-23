@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agentmemory.providers.base import BaseMemoryProvider, ProviderConfigurationError
+from agentmemory.providers.claude_memory import ClaudeMemoryProvider
 from agentmemory.providers.localjson import LocalJsonProvider
 from agentmemory.providers.mem0 import Mem0Provider
 
@@ -21,7 +22,7 @@ class ProviderDescriptor:
 
 
 def provider_descriptors() -> dict[str, ProviderDescriptor]:
-    providers = (LocalJsonProvider, Mem0Provider)
+    providers = (LocalJsonProvider, Mem0Provider, ClaudeMemoryProvider)
     return {provider.provider_name: ProviderDescriptor(provider_class=provider) for provider in providers}
 
 

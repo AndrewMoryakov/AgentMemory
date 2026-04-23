@@ -151,6 +151,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
     def test_provider_registry_contains_second_test_provider(self) -> None:
         self.assertIn("localjson", agentmemory_runtime.provider_registry())
         self.assertIn("mem0", agentmemory_runtime.provider_registry())
+        self.assertIn("claude_memory", agentmemory_runtime.provider_registry())
 
     def test_provider_class_exposes_certification_metadata(self) -> None:
         metadata = agentmemory_runtime.provider_class("mem0").provider_metadata()
@@ -173,6 +174,39 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["provider"], "localjson")
         self.assertIn("storage_path", payload)
         self.assertTrue(payload["capabilities"]["supports_text_search"])
+        self.assertEqual(payload["runtime_policy"]["transport_mode"], "direct")
+
+    def test_runtime_can_use_claude_memory_provider(self) -> None:
+        project_root = Path(self.temp_dir.name) / "project"
+        project_root.mkdir(parents=True, exist_ok=True)
+        (project_root / ".git").mkdir(exist_ok=True)
+        (project_root / "CLAUDE.md").write_text("# Root\n\nProject memory.\n", encoding="utf-8")
+        user_claude_dir = Path(self.temp_dir.name) / "user-claude"
+        auto_memory_dir = Path(self.temp_dir.name) / "auto-memory"
+        config = agentmemory_runtime.default_runtime_config()
+        config["runtime"]["provider"] = "claude_memory"
+        config["providers"]["claude_memory"] = agentmemory_runtime.provider_class("claude_memory").default_provider_config(
+            runtime_dir=self.temp_dir.name
+        )
+        config["providers"]["claude_memory"].update(
+            {
+                "project_root": str(project_root),
+                "user_claude_dir": str(user_claude_dir),
+                "auto_memory_dir": str(auto_memory_dir),
+                "include_user_memory": False,
+                "include_auto_memory": False,
+                "agentmemory_write_dir": str(project_root / ".claude" / "rules" / "agentmemory"),
+            }
+        )
+        agentmemory_runtime.write_runtime_config(config)
+
+        payload = agentmemory_runtime.health()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["provider"], "claude_memory")
+        self.assertEqual(payload["project_root"], str(project_root.resolve()))
+        self.assertTrue(payload["capabilities"]["supports_text_search"])
+        self.assertFalse(payload["capabilities"]["supports_scope_inventory"])
         self.assertEqual(payload["runtime_policy"]["transport_mode"], "direct")
 
     def test_runtime_info_uses_updated_api_host_and_port(self) -> None:
