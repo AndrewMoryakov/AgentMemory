@@ -26,6 +26,13 @@ def cli_operation_source(
             "kind": args.kind,
             "query": args.query,
         }
+    if command == "list-scopes-page":
+        return {
+            "limit": args.limit,
+            "cursor": args.cursor,
+            "kind": args.kind,
+            "query": args.query,
+        }
     if command == "export":
         return {"path": args.path}
     if command == "import":
@@ -127,6 +134,13 @@ def http_operation_source(
     if operation_name == "list_scopes":
         return {
             "limit": int((query_params.get("limit") or ["200"])[0]),
+            "kind": (query_params.get("kind") or [None])[0],
+            "query": (query_params.get("query") or [None])[0],
+        }
+    if operation_name == "list_scopes_page":
+        return {
+            "limit": int((query_params.get("limit") or ["200"])[0]),
+            "cursor": (query_params.get("cursor") or [None])[0],
             "kind": (query_params.get("kind") or [None])[0],
             "query": (query_params.get("query") or [None])[0],
         }

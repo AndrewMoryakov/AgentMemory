@@ -51,6 +51,32 @@ class ScopeRegistryTests(unittest.TestCase):
         self.assertEqual(filtered["totals"], {"users": 1, "agents": 0, "runs": 0})
         self.assertEqual(filtered["items"][0]["value"], "alpha")
 
+    def test_list_inventory_page_walks_with_opaque_cursor(self) -> None:
+        scope_registry.replace_provider_records(
+            "mem0",
+            [
+                {"id": "1", "memory": "a", "provider": "mem0", "user_id": "bravo"},
+                {"id": "2", "memory": "b", "provider": "mem0", "user_id": "alpha"},
+                {"id": "3", "memory": "c", "provider": "mem0", "user_id": "alpha"},
+                {"id": "4", "memory": "d", "provider": "mem0", "agent_id": "writer"},
+                {"id": "5", "memory": "e", "provider": "mem0", "run_id": "run-2"},
+                {"id": "6", "memory": "f", "provider": "mem0", "run_id": "run-1"},
+            ],
+            self.runtime_dir,
+        )
+
+        first = scope_registry.list_inventory_page("mem0", limit=2, cursor=None, kind=None, query=None, runtime_dir=self.runtime_dir)
+        second = scope_registry.list_inventory_page("mem0", limit=2, cursor=first["next_cursor"], kind=None, query=None, runtime_dir=self.runtime_dir)
+        third = scope_registry.list_inventory_page("mem0", limit=2, cursor=second["next_cursor"], kind=None, query=None, runtime_dir=self.runtime_dir)
+
+        values = [item["value"] for page in (first, second, third) for item in page["items"]]
+        self.assertEqual(values, ["writer", "run-1", "run-2", "alpha", "bravo"])
+        self.assertIsNotNone(first["next_cursor"])
+        self.assertIsNotNone(second["next_cursor"])
+        self.assertIsNone(third["next_cursor"])
+        self.assertTrue(first["pagination_supported"])
+        self.assertEqual(first["totals"], {"users": 2, "agents": 1, "runs": 2})
+
     def test_replace_provider_records_only_replaces_target_provider(self) -> None:
         scope_registry.replace_provider_records(
             "mem0",
@@ -73,6 +99,46 @@ class ScopeRegistryTests(unittest.TestCase):
 
         self.assertEqual(mem0_inventory["totals"], {"users": 0, "agents": 1, "runs": 0})
         self.assertEqual(local_inventory["totals"], {"users": 1, "agents": 0, "runs": 0})
+
+    def test_list_expired_memory_ids_uses_registry_expiry_index(self) -> None:
+        scope_registry.replace_provider_records(
+            "mem0",
+            [
+                {
+                    "id": "expired",
+                    "memory": "a",
+                    "provider": "mem0",
+                    "user_id": "u1",
+                    "metadata": {"expires_at": "2026-04-22T00:00:00+00:00"},
+                },
+                {
+                    "id": "fresh",
+                    "memory": "b",
+                    "provider": "mem0",
+                    "user_id": "u1",
+                    "metadata": {"expires_at": "2026-04-24T00:00:00+00:00"},
+                },
+                {"id": "permanent", "memory": "c", "provider": "mem0", "user_id": "u1"},
+            ],
+            self.runtime_dir,
+        )
+        scope_registry.replace_provider_records(
+            "localjson",
+            [
+                {
+                    "id": "other-provider-expired",
+                    "memory": "d",
+                    "provider": "localjson",
+                    "user_id": "u1",
+                    "metadata": {"expires_at": "2026-04-22T00:00:00+00:00"},
+                },
+            ],
+            self.runtime_dir,
+        )
+
+        expired = scope_registry.list_expired_memory_ids("mem0", self.runtime_dir)
+
+        self.assertEqual(expired, ["expired"])
 
     def test_concurrent_upserts_preserve_all_records(self) -> None:
         processes = [

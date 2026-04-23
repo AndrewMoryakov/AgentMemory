@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Redeploy AgentMemory with the guards the POSTMORTEM_NETWORK_DETACH
-# postmortem says we need: --force-recreate plus an idempotent network
-# re-attach to netbird_netbird. Run this instead of raw docker compose up
-# whenever deploying or updating on the production host.
+# Redeploy AgentMemory with the guards the network-drift postmortem says we
+# need: --force-recreate plus an idempotent re-attach to netbird_netbird.
+# Run this instead of raw docker compose up whenever deploying or updating on
+# the production host. Context and reproducer live in
+# docs/COMPOSE_V2_NETWORK_DRIFT.md.
 
 set -euo pipefail
 
@@ -19,10 +20,9 @@ echo "== docker compose up -d --build --force-recreate =="
 docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --build --force-recreate
 
 echo "== Self-heal: ensure ${APP_CONTAINER} is on ${TRAEFIK_NETWORK} =="
-# Compose v2 has been observed silently dropping non-primary network
-# attachments on recreate. docker network connect is idempotent — if
-# already attached, docker returns an "already exists" error which we
-# suppress.
+# Compose v2 has been observed silently dropping declared external-network
+# attachments on recreate. docker network connect is idempotent — if already
+# attached, docker returns an "already exists" error which we suppress.
 docker network connect "${TRAEFIK_NETWORK}" "${APP_CONTAINER}" 2>&1 \
   | grep -v "already exists" \
   || true

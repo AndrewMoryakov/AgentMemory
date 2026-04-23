@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agentmemory.runtime.config import provider_class
+from agentmemory.providers.registry import provider_descriptors
 
 
 @dataclass(frozen=True)
@@ -13,17 +13,14 @@ class ProviderCertificationPolicy:
 
 
 def certification_policy_targets() -> dict[str, ProviderCertificationPolicy]:
-    localjson = provider_class("localjson")
-    mem0 = provider_class("mem0")
-    return {
-        "localjson": ProviderCertificationPolicy(
-            provider_name=localjson.provider_name,
-            expected_status_code=str(localjson.provider_metadata()["expected_certification_status_code"]),
-            notes=str(localjson.provider_metadata()["certification_notes"]),
-        ),
-        "mem0": ProviderCertificationPolicy(
-            provider_name=mem0.provider_name,
-            expected_status_code=str(mem0.provider_metadata()["expected_certification_status_code"]),
-            notes=str(mem0.provider_metadata()["certification_notes"]),
-        ),
-    }
+    targets: dict[str, ProviderCertificationPolicy] = {}
+    for descriptor in provider_descriptors().values():
+        metadata = descriptor.metadata
+        if not bool(metadata.get("certification_policy_enabled", False)):
+            continue
+        targets[descriptor.provider_name] = ProviderCertificationPolicy(
+            provider_name=descriptor.provider_name,
+            expected_status_code=str(metadata["expected_certification_status_code"]),
+            notes=str(metadata["certification_notes"]),
+        )
+    return targets

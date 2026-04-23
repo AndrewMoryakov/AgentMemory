@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from agentmemory.providers.registry import default_onboarding_provider_name, onboarding_provider_names, provider_class
+
 try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import Completer, Completion
@@ -215,10 +217,13 @@ def run_onboarding(
     emit('AgentMemory onboarding')
     emit('This is the first run. I will guide you through a minimal local setup.')
 
-    provider = prompt('Provider [mem0/localjson] (default: mem0): ').strip().lower() or 'mem0'
-    if provider not in {'mem0', 'localjson'}:
-        emit('Unknown provider. Falling back to mem0.')
-        provider = 'mem0'
+    provider_names = onboarding_provider_names()
+    default_provider = default_onboarding_provider_name()
+    provider_options = "/".join(provider_names)
+    provider = prompt(f'Provider [{provider_options}] (default: {default_provider}): ').strip().lower() or default_provider
+    if provider not in provider_names:
+        emit(f"Unknown provider: {provider}. Available providers: {', '.join(provider_names)}.")
+        return 2
 
     api_host = prompt(f'API host (default: {context.api_host}): ').strip() or context.api_host
     api_port = prompt(f'API port (default: {context.api_port}): ').strip() or str(context.api_port)
@@ -229,12 +234,8 @@ def run_onboarding(
         return rc
 
     configure_args = ['configure', '--provider', provider, '--api-host', api_host, '--api-port', api_port]
-    configure_stdin: str | None = None
-    if provider == 'mem0':
-        key = prompt('OpenRouter API key (optional, press Enter to skip): ').strip()
-        if key:
-            configure_args.append('--openrouter-api-key-stdin')
-            configure_stdin = key
+    provider_args, configure_stdin = provider_class(provider).onboarding_configuration(prompt=prompt)
+    configure_args.extend(provider_args)
     rc = _run_command(run_command, configure_args, configure_stdin)
     if rc != 0:
         return rc

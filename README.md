@@ -22,16 +22,19 @@ That includes:
 - browser-based inspection
 - diagnostics and runtime guidance
 - provider-aware transport behavior
+- optional lifecycle semantics such as TTL expiry when the caller chooses to use them
 
 This is the main distinction:
 
 - `mem0` is a memory engine
 - `AgentMemory` is a memory runtime layer
+- `AgentMemory` is not the layer that decides what should be remembered temporarily or permanently
 
 Start here if you want the fuller explanation:
 
 - [Why AgentMemory Exists](docs/WHY_AGENTMEMORY.md)
 - [Mem0 vs AgentMemory](docs/MEM0_VS_AGENTMEMORY.md)
+- [What AgentMemory Adds To Mem0](docs/MEM0_WITH_AGENTMEMORY_VALUE.md)
 - [What AgentMemory Actually Adds](docs/WHAT_AGENTMEMORY_ACTUALLY_ADDS.md)
 - [Start Here](docs/START_HERE.md)
 
@@ -195,6 +198,7 @@ Current runtime layers:
 - provider contract: normalized records, typed provider errors, capabilities, runtime policy
 - shared runtime: operation registry, adapters, validation, error shaping, proxy/direct routing
 - surfaces: CLI, HTTP API, MCP, interactive shell, browser UI
+- optional runtime semantics: pagination, portability, scope inventory, and user-controlled lifecycle support
 
 More detail:
 
@@ -212,6 +216,23 @@ More detail:
 - `localjson` is the built-in testing and demo provider
 - provider contract, operation registry, transport adapters, and runtime policy are implemented
 - diagnostics and scope discovery are part of the current product surface
+
+## Current Limitations
+
+AgentMemory is usable as a local shared-memory runtime, but it is still a
+public alpha. The current risk/bug index lives in
+[Backlog — Known Bugs & Hygiene Items](docs/BACKLOG.md).
+
+Important current limitations:
+
+- TTL exists as optional expiry support. It is caller-controlled metadata, not
+  automatic short-term/long-term classification. Providers with degraded scope
+  registry sync may require `rebuild-scope-registry` before TTL sweeps can be
+  considered complete.
+- `mem0` uses the safe single-page fallback for pagination until a backend-safe
+  cursor strategy is implemented.
+- Compose v2 external-network drift is mitigated by `deploy/redeploy.sh`, but
+  the upstream root cause remains outside this repo.
 
 ## Key Design Choice For Mem0
 
@@ -311,9 +332,12 @@ Use `localjson` when you want:
 - [Start Here](docs/START_HERE.md)
 - [Why AgentMemory Exists](docs/WHY_AGENTMEMORY.md)
 - [Mem0 vs AgentMemory](docs/MEM0_VS_AGENTMEMORY.md)
+- [What AgentMemory Adds To Mem0](docs/MEM0_WITH_AGENTMEMORY_VALUE.md)
 - [What AgentMemory Actually Adds](docs/WHAT_AGENTMEMORY_ACTUALLY_ADDS.md)
 - [Use Cases](docs/USE_CASES.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Runtime Boundaries](docs/RUNTIME_BOUNDARIES.md)
+- [Backlog / Current Limitations](docs/BACKLOG.md)
 - [Positioning Assets](docs/POSITIONING.md)
 - [Roadmap](ROADMAP.md)
 - [Contributing](CONTRIBUTING.md)

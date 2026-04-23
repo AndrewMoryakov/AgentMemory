@@ -179,6 +179,10 @@ The stronger and more honest framing is:
 `mem0` solves the backend problem.
 `AgentMemory` solves the shared-runtime, multi-client, agent-integration, and operational-layer problem.
 
+Optional lifecycle support such as TTL belongs here only as runtime execution
+of caller-supplied metadata. It does not make AgentMemory the layer that
+decides what should be temporary or permanent.
+
 That is the real use case.
 
 ## One-Line Positioning

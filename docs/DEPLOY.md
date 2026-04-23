@@ -80,6 +80,9 @@ waits for `https://andrewm.ru/agentmemory/health` to return `200`. Exits
 non-zero if the backend hasn't come back within ~60 seconds, so CI / cron
 can catch partial deploys.
 
+Background and an issue-ready reproducer live in
+[COMPOSE_V2_NETWORK_DRIFT.md](COMPOSE_V2_NETWORK_DRIFT.md).
+
 Manual equivalent if the script isn't convenient:
 
 ```bash
@@ -93,6 +96,13 @@ Compose v2 has been observed silently dropping non-primary network
 attachments on plain `up -d` (see `/opt/telegramchatanalyzer/POSTMORTEM_NETWORK_DETACH.md`).
 `--force-recreate` doesn't always prevent it either; the manual
 `docker network connect` is the guarantee.
+
+If you need to validate the behavior on another host before trusting a deploy
+change, run:
+
+```bash
+deploy/repro-compose-network-drift.sh
+```
 
 ## 5. Plug into Traefik
 
@@ -176,13 +186,16 @@ but contribute `0` to cost totals.
 
 Hook a scraper later if needed; there is no Prometheus server on the host.
 
-## Memory lifecycle
+## Optional lifecycle support
 
 **TTL.** `memory_add` accepts either `metadata.ttl_seconds` (positive number)
-or `metadata.expires_at` (ISO-8601 UTC). The runtime normalizes both to a
-stored `expires_at`. Expired records are filtered from `memory_list`/
-`memory_search` on read, and `memory_get` on an expired id raises
-`MemoryNotFoundError` — matching the hard-delete contract.
+or `metadata.expires_at` (ISO-8601 UTC) when the caller intentionally wants
+expiry. The runtime normalizes both to a stored `expires_at`. Expired records
+are filtered from `memory_list`/`memory_search` on read, and `memory_get` on
+an expired id raises `MemoryNotFoundError` — matching the hard-delete contract.
+
+AgentMemory does not decide which memories should receive TTL. That is a caller
+or application policy decision outside the runtime.
 
 A background sweeper in the API process hard-deletes expired records every
 10 minutes by default. Override with `AGENTMEMORY_TTL_SWEEP_MINUTES` (env,

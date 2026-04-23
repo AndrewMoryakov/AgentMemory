@@ -55,6 +55,13 @@ class AgentMemoryOperationAdaptersTests(unittest.TestCase):
 
         self.assertEqual(source, {"limit": 25, "kind": "user", "query": "def"})
 
+    def test_cli_operation_source_builds_list_scopes_page_payload(self) -> None:
+        args = argparse.Namespace(limit=25, cursor="opaque", kind="user", query="def")
+
+        source = cli_operation_source("list-scopes-page", args, parse_json_arg=lambda raw: raw)
+
+        self.assertEqual(source, {"limit": 25, "cursor": "opaque", "kind": "user", "query": "def"})
+
     def test_cli_operation_source_builds_export_payload(self) -> None:
         args = argparse.Namespace(path="memories.jsonl")
 
@@ -137,6 +144,19 @@ class AgentMemoryOperationAdaptersTests(unittest.TestCase):
         )
 
         self.assertEqual(source, {"limit": 25, "kind": "user", "query": "def"})
+
+    def test_http_operation_source_builds_list_scopes_page_source(self) -> None:
+        source = http_operation_source(
+            "list_scopes_page",
+            query_params={
+                "limit": ["25"],
+                "cursor": ["opaque"],
+                "kind": ["user"],
+                "query": ["def"],
+            },
+        )
+
+        self.assertEqual(source, {"limit": 25, "cursor": "opaque", "kind": "user", "query": "def"})
 
     def test_http_operation_source_rejects_invalid_filters_json(self) -> None:
         with self.assertRaises(ProviderValidationError):

@@ -32,6 +32,7 @@ from agentmemory.providers.base import (
     ProviderUnavailableError,
     ProviderValidationError,
     ScopeInventory,
+    ScopeInventoryPage,
 )
 from agentmemory.runtime import scope_registry
 
@@ -117,6 +118,18 @@ class Mem0Provider(BaseMemoryProvider):
     certification_status = "certified"
     expected_certification_status_code = "certified_with_skips"
     certification_notes = "Mem0 is expected to certify with one skipped negative-path harness case."
+    certification_harness_classes = ("test_mem0_provider.Mem0ProviderHarnessTests",)
+    certification_related_test_modules = (
+        "test_mem0_provider",
+        "test_provider_contract_v1",
+        "test_agentmemory_runtime",
+        "test_agentmemory_http_client",
+        "test_agentmemory_mcp_server",
+        "test_agentmemory_core",
+    )
+    certification_policy_enabled = True
+    onboarding_default = True
+    onboarding_order = 10
 
     @classmethod
     def default_provider_config(cls, *, runtime_dir: str) -> dict[str, Any]:
@@ -195,6 +208,13 @@ class Mem0Provider(BaseMemoryProvider):
                 raise ProviderConfigurationError(f"--openrouter-api-key-env {env_name} is not set or empty")
             updates["OPENROUTER_API_KEY"] = api_key
         return updates
+
+    @classmethod
+    def onboarding_configuration(cls, *, prompt) -> tuple[list[str], str | None]:
+        key = prompt("OpenRouter API key (optional, press Enter to skip): ").strip()
+        if not key:
+            return [], None
+        return ["--openrouter-api-key-stdin"], key
 
     @classmethod
     def apply_cli_configuration(cls, *, provider_config: dict[str, Any], args) -> bool:
@@ -594,6 +614,23 @@ class Mem0Provider(BaseMemoryProvider):
 
     def list_scopes(self, *, limit: int = 200, kind: str | None = None, query: str | None = None) -> ScopeInventory:
         return scope_registry.list_inventory(self.provider_name, limit, kind, query, self.runtime_dir)
+
+    def list_scopes_page(
+        self,
+        *,
+        limit: int = 200,
+        cursor: str | None = None,
+        kind: str | None = None,
+        query: str | None = None,
+    ) -> ScopeInventoryPage:
+        return scope_registry.list_inventory_page(
+            self.provider_name,
+            limit=limit,
+            cursor=cursor,
+            kind=kind,
+            query=query,
+            runtime_dir=self.runtime_dir,
+        )
 
     def _map_exception(self, exc: Exception) -> Exception:
         if isinstance(exc, ProviderConfigurationError):

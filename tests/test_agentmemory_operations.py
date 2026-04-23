@@ -1,10 +1,29 @@
 import unittest
 
 import agentmemory.runtime.operations as agentmemory_operations
-from agentmemory.providers.base import ProviderValidationError
+from agentmemory.providers.base import ProviderCapabilityError, ProviderValidationError
 
 
 class AgentMemoryOperationsTests(unittest.TestCase):
+    def provider_capabilities(self, **overrides):
+        capabilities = {
+            "supports_semantic_search": True,
+            "supports_text_search": False,
+            "supports_filters": True,
+            "supports_metadata_filters": True,
+            "supports_rerank": True,
+            "supports_update": True,
+            "supports_delete": True,
+            "supports_scopeless_list": False,
+            "requires_scope_for_list": True,
+            "requires_scope_for_search": True,
+            "supports_owner_process_mode": True,
+            "supports_scope_inventory": True,
+            "supports_pagination": False,
+        }
+        capabilities.update(overrides)
+        return capabilities
+
     def test_registry_contains_expected_core_operations(self) -> None:
         self.assertEqual(
             set(agentmemory_operations.OPERATIONS.keys()),
@@ -12,6 +31,7 @@ class AgentMemoryOperationsTests(unittest.TestCase):
                 "health",
                 "add",
                 "list_scopes",
+                "list_scopes_page",
                 "export",
                 "import",
                 "search",
@@ -34,21 +54,7 @@ class AgentMemoryOperationsTests(unittest.TestCase):
         original_caps = agentmemory_operations.active_provider_capabilities
         try:
             agentmemory_operations.active_provider_name = lambda: "mem0"  # type: ignore[assignment]
-            agentmemory_operations.active_provider_capabilities = lambda: {  # type: ignore[assignment]
-                "supports_semantic_search": True,
-                "supports_text_search": False,
-                "supports_filters": True,
-                "supports_metadata_filters": True,
-                "supports_rerank": True,
-                "supports_update": True,
-                "supports_delete": True,
-                "supports_scopeless_list": False,
-                "requires_scope_for_list": True,
-                "requires_scope_for_search": True,
-                "supports_owner_process_mode": True,
-                "supports_scope_inventory": True,
-                "supports_pagination": False,
-            }
+            agentmemory_operations.active_provider_capabilities = self.provider_capabilities  # type: ignore[assignment]
             with self.assertRaises(ProviderValidationError):
                 agentmemory_operations.OPERATIONS["search"].execute({"query": "demo"})
         finally:
@@ -61,6 +67,13 @@ class AgentMemoryOperationsTests(unittest.TestCase):
         self.assertIn("limit", schema["properties"])
         self.assertIn("kind", schema["properties"])
         self.assertIn("query", schema["properties"])
+
+    def test_list_scopes_page_operation_schema_accepts_cursor(self) -> None:
+        schema = agentmemory_operations.OPERATIONS["list_scopes_page"].input_schema
+
+        self.assertIn("limit", schema["properties"])
+        self.assertIn("cursor", schema["properties"])
+        self.assertIn("kind", schema["properties"])
 
     def test_export_and_import_operation_schema_require_path(self) -> None:
         export_schema = agentmemory_operations.OPERATIONS["export"].input_schema
@@ -95,26 +108,48 @@ class AgentMemoryOperationsTests(unittest.TestCase):
         original_caps = agentmemory_operations.active_provider_capabilities
         try:
             agentmemory_operations.active_provider_name = lambda: "mem0"  # type: ignore[assignment]
-            agentmemory_operations.active_provider_capabilities = lambda: {  # type: ignore[assignment]
-                "supports_semantic_search": True,
-                "supports_text_search": False,
-                "supports_filters": True,
-                "supports_metadata_filters": True,
-                "supports_rerank": True,
-                "supports_update": True,
-                "supports_delete": True,
-                "supports_scopeless_list": False,
-                "requires_scope_for_list": True,
-                "requires_scope_for_search": True,
-                "supports_owner_process_mode": True,
-                "supports_scope_inventory": True,
-                "supports_pagination": False,
-            }
+            agentmemory_operations.active_provider_capabilities = self.provider_capabilities  # type: ignore[assignment]
             with self.assertRaises(ProviderValidationError):
                 agentmemory_operations.OPERATIONS["reconcile"].execute({})
         finally:
             agentmemory_operations.active_provider_name = original_name  # type: ignore[assignment]
             agentmemory_operations.active_provider_capabilities = original_caps  # type: ignore[assignment]
+
+    def test_update_operation_rejects_provider_without_update_capability(self) -> None:
+        original_name = agentmemory_operations.active_provider_name
+        original_caps = agentmemory_operations.active_provider_capabilities
+        original_update = agentmemory_operations.memory_update
+        try:
+            agentmemory_operations.active_provider_name = lambda: "readonly"  # type: ignore[assignment]
+            agentmemory_operations.active_provider_capabilities = lambda: self.provider_capabilities(  # type: ignore[assignment]
+                supports_update=False
+            )
+            agentmemory_operations.memory_update = lambda **kwargs: self.fail("update should not reach provider")  # type: ignore[assignment]
+
+            with self.assertRaises(ProviderCapabilityError):
+                agentmemory_operations.OPERATIONS["update"].execute({"memory_id": "m1", "data": "new"})
+        finally:
+            agentmemory_operations.active_provider_name = original_name  # type: ignore[assignment]
+            agentmemory_operations.active_provider_capabilities = original_caps  # type: ignore[assignment]
+            agentmemory_operations.memory_update = original_update  # type: ignore[assignment]
+
+    def test_delete_operation_rejects_provider_without_delete_capability(self) -> None:
+        original_name = agentmemory_operations.active_provider_name
+        original_caps = agentmemory_operations.active_provider_capabilities
+        original_delete = agentmemory_operations.memory_delete
+        try:
+            agentmemory_operations.active_provider_name = lambda: "archive"  # type: ignore[assignment]
+            agentmemory_operations.active_provider_capabilities = lambda: self.provider_capabilities(  # type: ignore[assignment]
+                supports_delete=False
+            )
+            agentmemory_operations.memory_delete = lambda **kwargs: self.fail("delete should not reach provider")  # type: ignore[assignment]
+
+            with self.assertRaises(ProviderCapabilityError):
+                agentmemory_operations.OPERATIONS["delete"].execute({"memory_id": "m1"})
+        finally:
+            agentmemory_operations.active_provider_name = original_name  # type: ignore[assignment]
+            agentmemory_operations.active_provider_capabilities = original_caps  # type: ignore[assignment]
+            agentmemory_operations.memory_delete = original_delete  # type: ignore[assignment]
 
 
 if __name__ == "__main__":

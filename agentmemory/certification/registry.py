@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agentmemory.runtime.config import provider_class
+from agentmemory.providers.registry import provider_descriptors
 
 
 @dataclass(frozen=True)
@@ -15,38 +15,18 @@ class ProviderCertificationTarget:
 
 
 def certification_targets() -> dict[str, ProviderCertificationTarget]:
-    localjson = provider_class("localjson")
-    mem0 = provider_class("mem0")
-    return {
-        "localjson": ProviderCertificationTarget(
-            provider_name=localjson.provider_name,
-            status=str(localjson.provider_metadata()["certification_status"]),
-            description=str(localjson.provider_metadata()["summary"]),
-            harness_classes=("test_localjson_provider.LocalJsonProviderTests",),
-            related_test_modules=(
-                "test_localjson_provider",
-                "test_provider_contract_v1",
-                "test_agentmemory_runtime",
-                "test_agentmemory_http_client",
-                "test_agentmemory_mcp_server",
-                "test_agentmemory_admin",
-                "test_agentmemory_core",
-            ),
-        ),
-        "mem0": ProviderCertificationTarget(
-            provider_name=mem0.provider_name,
-            status=str(mem0.provider_metadata()["certification_status"]),
-            description=str(mem0.provider_metadata()["summary"]),
-            harness_classes=("test_mem0_provider.Mem0ProviderHarnessTests",),
-            related_test_modules=(
-                "test_mem0_provider",
-                "test_provider_contract_v1",
-                "test_agentmemory_runtime",
-                "test_agentmemory_http_client",
-                "test_agentmemory_mcp_server",
-                "test_agentmemory_core",
-            ),
-        ),
+    targets: dict[str, ProviderCertificationTarget] = {}
+    for descriptor in provider_descriptors().values():
+        metadata = descriptor.metadata
+        targets[descriptor.provider_name] = ProviderCertificationTarget(
+            provider_name=descriptor.provider_name,
+            status=str(metadata["certification_status"]),
+            description=str(metadata["summary"]),
+            harness_classes=tuple(str(item) for item in metadata.get("certification_harness_classes", ())),
+            related_test_modules=tuple(str(item) for item in metadata.get("certification_related_test_modules", ())),
+        )
+    targets.update(
+        {
         "inmemory-contract": ProviderCertificationTarget(
             provider_name="inmemory-contract",
             status="test-only",
@@ -54,4 +34,6 @@ def certification_targets() -> dict[str, ProviderCertificationTarget]:
             harness_classes=("test_provider_contract_harness_fake.InMemoryContractProviderHarnessTests",),
             related_test_modules=("test_provider_contract_harness_fake",),
         ),
-    }
+        }
+    )
+    return targets

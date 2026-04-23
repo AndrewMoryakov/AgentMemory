@@ -91,3 +91,6 @@ The honest positioning is:
 - `AgentMemory` solves the shared-runtime and multi-client integration problem
 
 That is the real distinction.
+
+If you want the product-facing version of the same story, read
+[What AgentMemory Adds To Mem0](MEM0_WITH_AGENTMEMORY_VALUE.md).

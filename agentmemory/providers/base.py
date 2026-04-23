@@ -114,6 +114,14 @@ class ScopeInventory(TypedDict):
     totals: dict[str, int]
 
 
+class ScopeInventoryPage(TypedDict):
+    provider: str
+    items: list[ScopeInventoryItem]
+    totals: dict[str, int]
+    next_cursor: str | None
+    pagination_supported: bool
+
+
 class BaseMemoryProvider(ABC):
     provider_name = "base"
     display_name = "Base"
@@ -121,6 +129,12 @@ class BaseMemoryProvider(ABC):
     certification_status = "experimental"
     expected_certification_status_code: str | None = None
     certification_notes = ""
+    certification_harness_classes: tuple[str, ...] = ()
+    certification_related_test_modules: tuple[str, ...] = ()
+    certification_policy_enabled = False
+    onboarding_enabled = True
+    onboarding_default = False
+    onboarding_order = 100
 
     def __init__(self, *, runtime_config: dict[str, Any], provider_config: dict[str, Any]) -> None:
         self.runtime_config = runtime_config
@@ -139,6 +153,12 @@ class BaseMemoryProvider(ABC):
             "certification_status": cls.certification_status,
             "expected_certification_status_code": cls.expected_certification_status_code,
             "certification_notes": cls.certification_notes,
+            "certification_harness_classes": cls.certification_harness_classes,
+            "certification_related_test_modules": cls.certification_related_test_modules,
+            "certification_policy_enabled": cls.certification_policy_enabled,
+            "onboarding_enabled": cls.onboarding_enabled,
+            "onboarding_default": cls.onboarding_default,
+            "onboarding_order": cls.onboarding_order,
         }
 
     @classmethod
@@ -157,6 +177,10 @@ class BaseMemoryProvider(ABC):
     @classmethod
     def env_updates_from_args(cls, args) -> dict[str, str]:
         return {}
+
+    @classmethod
+    def onboarding_configuration(cls, *, prompt) -> tuple[list[str], str | None]:
+        return [], None
 
     @classmethod
     @abstractmethod
@@ -275,17 +299,34 @@ class BaseMemoryProvider(ABC):
     def get_memory(self, memory_id) -> MemoryRecord:
         raise NotImplementedError
 
-    @abstractmethod
     def update_memory(self, *, memory_id, data, metadata=None) -> MemoryRecord:
-        raise NotImplementedError
+        raise ProviderCapabilityError(f"{self.display_name} does not support memory update.")
 
-    @abstractmethod
     def delete_memory(self, *, memory_id) -> DeleteResult:
-        raise NotImplementedError
+        raise ProviderCapabilityError(f"{self.display_name} does not support memory delete.")
 
     @abstractmethod
     def list_scopes(self, *, limit: int = 200, kind: str | None = None, query: str | None = None) -> ScopeInventory:
         raise NotImplementedError
+
+    def list_scopes_page(
+        self,
+        *,
+        limit: int = 200,
+        cursor: str | None = None,
+        kind: str | None = None,
+        query: str | None = None,
+    ) -> ScopeInventoryPage:
+        if cursor is not None:
+            raise ProviderCapabilityError(f"{self.display_name} does not support paginated scope inventory cursors.")
+        inventory = self.list_scopes(limit=limit, kind=kind, query=query)
+        return {
+            "provider": inventory["provider"],
+            "items": inventory["items"],
+            "totals": inventory["totals"],
+            "next_cursor": None,
+            "pagination_supported": False,
+        }
 
     def iter_scope_registry_seed_records(self) -> list[MemoryRecord]:
         raise ProviderCapabilityError(f"{self.display_name} does not support scope-registry rebuild.")

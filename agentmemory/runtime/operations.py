@@ -10,6 +10,7 @@ from agentmemory.runtime.http_client import (
     proxy_get,
     proxy_health,
     proxy_list_scopes,
+    proxy_list_scopes_page,
     proxy_list,
     proxy_list_page,
     proxy_search,
@@ -25,6 +26,7 @@ from agentmemory.runtime.config import (
     memory_delete,
     memory_get,
     memory_list_scopes,
+    memory_list_scopes_page,
     memory_list,
     memory_list_page,
     memory_search,
@@ -35,7 +37,13 @@ from agentmemory.runtime import lifecycle as lifecycle_module
 from agentmemory.runtime import metrics as metrics_registry
 from agentmemory.runtime import portability as portability_module
 from agentmemory.runtime import reconcile as reconcile_module
-from agentmemory.runtime.transport import execute_transport_operation, validate_and_build_list_kwargs, validate_and_build_search_kwargs
+from agentmemory.runtime.transport import (
+    execute_transport_operation,
+    validate_and_build_list_kwargs,
+    validate_and_build_search_kwargs,
+    validate_delete_request,
+    validate_update_request,
+)
 from agentmemory.providers.base import MemoryNotFoundError
 
 LOGGER = logging.getLogger(__name__)
@@ -201,6 +209,20 @@ def _execute_list_scopes(source: dict[str, Any]) -> Any:
     )
 
 
+def _execute_list_scopes_page(source: dict[str, Any]) -> Any:
+    kwargs = {
+        "limit": source.get("limit", 200),
+        "cursor": source.get("cursor"),
+        "kind": source.get("kind"),
+        "query": source.get("query"),
+    }
+    return execute_transport_operation(
+        use_proxy=should_proxy_to_api(),
+        local_call=lambda: memory_list_scopes_page(**kwargs),
+        proxy_call=lambda: proxy_list_scopes_page(**kwargs),
+    )
+
+
 def _execute_export(source: dict[str, Any]) -> Any:
     provider_name = active_provider_name()
     capabilities = active_provider_capabilities()
@@ -212,6 +234,11 @@ def _execute_export(source: dict[str, Any]) -> Any:
             use_proxy=should_proxy_to_api(),
             local_call=lambda: memory_list_scopes(**kwargs),
             proxy_call=lambda: proxy_list_scopes(**kwargs),
+        ),
+        list_scopes_page=lambda **kwargs: execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_list_scopes_page(**kwargs),
+            proxy_call=lambda: proxy_list_scopes_page(**kwargs),
         ),
         list_memories=lambda **kwargs: execute_transport_operation(
             use_proxy=should_proxy_to_api(),
@@ -272,6 +299,17 @@ def _filter_unexpired_with_limit_refill(
     return last_unexpired
 
 
+def _filter_unexpired_page(page: Any) -> Any:
+    if not isinstance(page, dict):
+        return page
+    items = page.get("items")
+    if not isinstance(items, list):
+        return page
+    filtered = dict(page)
+    filtered["items"] = lifecycle_module.filter_unexpired(items)
+    return filtered
+
+
 def _execute_search(source: dict[str, Any]) -> Any:
     kwargs = validate_and_build_search_kwargs(
         provider_name=active_provider_name(),
@@ -298,11 +336,12 @@ def _execute_search_page(source: dict[str, Any]) -> Any:
         default_limit=10,
     )
     kwargs["cursor"] = source.get("cursor")
-    return execute_transport_operation(
+    page = execute_transport_operation(
         use_proxy=should_proxy_to_api(),
         local_call=lambda: memory_search_page(**kwargs),
         proxy_call=lambda: proxy_search_page(**kwargs),
     )
+    return _filter_unexpired_page(page)
 
 
 def _execute_list(source: dict[str, Any]) -> Any:
@@ -331,11 +370,12 @@ def _execute_list_page(source: dict[str, Any]) -> Any:
         default_limit=100,
     )
     kwargs["cursor"] = source.get("cursor")
-    return execute_transport_operation(
+    page = execute_transport_operation(
         use_proxy=should_proxy_to_api(),
         local_call=lambda: memory_list_page(**kwargs),
         proxy_call=lambda: proxy_list_page(**kwargs),
     )
+    return _filter_unexpired_page(page)
 
 
 def _execute_reconcile(source: dict[str, Any]) -> Any:
@@ -385,6 +425,7 @@ def _execute_get(source: dict[str, Any]) -> Any:
 
 
 def _execute_update(source: dict[str, Any]) -> Any:
+    validate_update_request(provider_name=active_provider_name(), capabilities=active_provider_capabilities())
     kwargs = {
         "memory_id": source["memory_id"],
         "data": source["data"],
@@ -398,6 +439,7 @@ def _execute_update(source: dict[str, Any]) -> Any:
 
 
 def _execute_delete(source: dict[str, Any]) -> Any:
+    validate_delete_request(provider_name=active_provider_name(), capabilities=active_provider_capabilities())
     memory_id = source["memory_id"]
     try:
         return execute_transport_operation(
@@ -490,6 +532,23 @@ OPERATIONS: dict[str, OperationSpec] = {
             "additionalProperties": False,
         },
         execute=_execute_list_scopes,
+    ),
+    "list_scopes_page": OperationSpec(
+        name="list_scopes_page",
+        mcp_name="memory_list_scopes_page",
+        title="List Scopes Page",
+        description="List one cursor page of known user, agent, and run scopes for the active provider.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "default": 200},
+                "cursor": {"type": ["string", "null"]},
+                "kind": {"type": ["string", "null"], "enum": ["user", "agent", "run", None]},
+                "query": {"type": ["string", "null"]},
+            },
+            "additionalProperties": False,
+        },
+        execute=_execute_list_scopes_page,
     ),
     "export": OperationSpec(
         name="export",

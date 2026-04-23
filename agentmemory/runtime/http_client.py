@@ -272,3 +272,13 @@ def proxy_list_scopes(*, limit: int = 200, kind: str | None = None, query: str |
     if encoded:
         path = f"{path}?{encoded}"
     return _request("GET", path)
+
+
+def proxy_list_scopes_page(*, limit: int = 200, cursor: str | None = None, kind: str | None = None, query: str | None = None):
+    ensure_api_running()
+    query_payload: dict[str, Any] = {"limit": limit, "cursor": cursor, "kind": kind, "query": query}
+    encoded = urlencode({key: value for key, value in query_payload.items() if value is not None})
+    path = "/admin/scopes/page"
+    if encoded:
+        path = f"{path}?{encoded}"
+    return _request("GET", path)

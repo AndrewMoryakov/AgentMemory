@@ -55,6 +55,7 @@ If you only want the short version:
 
 - use `mem0` directly when one Python app owns memory cleanly
 - use `AgentMemory` when memory needs to behave like shared local infrastructure for multiple clients, MCP tools, and scripts
+- treat TTL as optional caller-controlled expiry metadata, not as automatic memory classification
 
 ## 3. Switch To Mem0 Only After Localjson Works
 
@@ -93,15 +94,27 @@ If `mem0` fails, go back to `localjson` and confirm the runtime path still works
 Useful project-level references:
 
 - [README](../README.md)
+- [Backlog / Current Limitations](BACKLOG.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Roadmap](../ROADMAP.md)
 - [Visual Identity](VISUAL_IDENTITY.md)
 - [Positioning Assets](POSITIONING.md)
 - [Public Repo Settings Checklist](PUBLIC_REPO_SETTINGS.md)
 
+Before describing the project as production-ready, read the backlog's current
+priority index. AgentMemory is a public alpha: the local runtime is usable, but
+some scalability and validation follow-ups are still open.
+
 ## 7. If You Want To Extend Providers
 
 Read these after you understand the core product:
 
 - [Provider Adapter Rules](./PROVIDER_ADAPTER_RULES.md)
+- [Provider Certification Checklist](./PROVIDER_CERTIFICATION.md)
 - [Future Memory Providers](future-memory-providers/README.md)
+- [Runtime Boundaries](RUNTIME_BOUNDARIES.md)
+
+Before adding a new provider, check the backlog's provider-compatibility items
+and the certification checklist. Runtime lookup, certification metadata, policy
+targets, and interactive onboarding now share provider descriptors, so new
+providers should add metadata and setup hooks at the provider boundary.

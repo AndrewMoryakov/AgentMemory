@@ -189,6 +189,28 @@ class LifecycleTTLTests(unittest.TestCase):
         self.assertEqual(requested_limits, [2, 4])
         self.assertEqual([r["id"] for r in result], ["a", "c"])
 
+    def test_list_page_filters_expired_records(self) -> None:
+        now = lifecycle_module.utc_now()
+        fresh = {"id": "a", "memory": "fresh", "metadata": {"expires_at": (now + timedelta(seconds=60)).isoformat()}}
+        stale = {"id": "b", "memory": "stale", "metadata": {"expires_at": (now - timedelta(seconds=1)).isoformat()}}
+
+        def fake_memory_list_page(**_kwargs):
+            return {
+                "provider": "localjson",
+                "items": [fresh, stale],
+                "next_cursor": "next",
+                "pagination_supported": True,
+            }
+
+        with mock.patch.object(agentmemory_operations, "memory_list_page", fake_memory_list_page), \
+             mock.patch.object(agentmemory_operations, "should_proxy_to_api", lambda: False), \
+             mock.patch.object(agentmemory_operations, "active_provider_name", lambda: "localjson"), \
+             mock.patch.object(agentmemory_operations, "active_provider_capabilities", lambda: _caps(requires_scope_for_list=False, supports_scopeless_list=True, supports_pagination=True)):
+            result = agentmemory_operations.OPERATIONS["list_page"].execute({"limit": 2})
+
+        self.assertEqual([r["id"] for r in result["items"]], ["a"])
+        self.assertEqual(result["next_cursor"], "next")
+
     def test_get_on_expired_raises_memory_not_found(self) -> None:
         from agentmemory.providers.base import MemoryNotFoundError
         now = lifecycle_module.utc_now()
@@ -238,6 +260,28 @@ class LifecycleTTLTests(unittest.TestCase):
 
         self.assertEqual(requested_limits, [2, 4])
         self.assertEqual([r["id"] for r in result], ["a", "c"])
+
+    def test_search_page_filters_expired_records(self) -> None:
+        now = lifecycle_module.utc_now()
+        fresh = {"id": "a", "memory": "fresh-a", "score": 0.99, "metadata": {"expires_at": (now + timedelta(seconds=60)).isoformat()}}
+        stale = {"id": "b", "memory": "stale", "score": 0.98, "metadata": {"expires_at": (now - timedelta(seconds=1)).isoformat()}}
+
+        def fake_memory_search_page(**_kwargs):
+            return {
+                "provider": "localjson",
+                "items": [fresh, stale],
+                "next_cursor": "next",
+                "pagination_supported": True,
+            }
+
+        with mock.patch.object(agentmemory_operations, "memory_search_page", fake_memory_search_page), \
+             mock.patch.object(agentmemory_operations, "should_proxy_to_api", lambda: False), \
+             mock.patch.object(agentmemory_operations, "active_provider_name", lambda: "localjson"), \
+             mock.patch.object(agentmemory_operations, "active_provider_capabilities", lambda: _caps(requires_scope_for_search=False, supports_scopeless_list=True, supports_pagination=True)):
+            result = agentmemory_operations.OPERATIONS["search_page"].execute({"query": "fresh", "limit": 2})
+
+        self.assertEqual([r["id"] for r in result["items"]], ["a"])
+        self.assertEqual(result["next_cursor"], "next")
 
 
 class LifecycleDedupTests(unittest.TestCase):
@@ -374,6 +418,29 @@ class LifecycleDedupTests(unittest.TestCase):
 
 
 class LifecycleSweeperTests(unittest.TestCase):
+    def test_run_sweep_once_prefers_registry_expired_ids_without_fixed_windows(self) -> None:
+        def failing_list_scopes(**_kwargs):
+            raise AssertionError("registry-backed sweeper should not walk scope windows")
+
+        def failing_list_memories(**_kwargs):
+            raise AssertionError("registry-backed sweeper should not walk memory windows")
+
+        deleted_ids: list[str] = []
+
+        def fake_delete(*, memory_id):
+            deleted_ids.append(memory_id)
+
+        result = lifecycle_module.run_sweep_once(
+            list_scopes=failing_list_scopes,
+            list_memories=failing_list_memories,
+            delete_memory=fake_delete,
+            list_expired_memory_ids=lambda: ["b", "b", "c"],
+        )
+
+        self.assertEqual(deleted_ids, ["b", "c"])
+        self.assertEqual(result["deleted"], 2)
+        self.assertEqual(result["swept"], 2)
+
     def test_run_sweep_once_deletes_only_expired(self) -> None:
         now = lifecycle_module.utc_now()
         fresh = {"id": "a", "metadata": {"expires_at": (now + timedelta(seconds=60)).isoformat()}}

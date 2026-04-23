@@ -73,6 +73,16 @@ def validate_list_request(
         raise ProviderValidationError(f"Provider '{provider_name}' does not support filters for list.")
 
 
+def validate_update_request(*, provider_name: str, capabilities: ProviderCapabilities) -> None:
+    if not capabilities["supports_update"]:
+        raise ProviderCapabilityError(f"Provider '{provider_name}' does not support memory update.")
+
+
+def validate_delete_request(*, provider_name: str, capabilities: ProviderCapabilities) -> None:
+    if not capabilities["supports_delete"]:
+        raise ProviderCapabilityError(f"Provider '{provider_name}' does not support memory delete.")
+
+
 def build_search_kwargs(source: dict[str, Any], *, default_limit: int = 10) -> dict[str, Any]:
     return {
         "query": source["query"],

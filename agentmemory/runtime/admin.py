@@ -8,7 +8,9 @@ from typing import Any
 
 import agentmemory.clients as agentmemory_clients
 from agentmemory.runtime.atomic_io import atomic_write_json
+from agentmemory.runtime import lifecycle as lifecycle_module
 from agentmemory.runtime.config import (
+    active_provider_capabilities,
     active_provider_name,
     memory_delete,
     memory_get,
@@ -17,6 +19,7 @@ from agentmemory.runtime.config import (
     memory_update,
     runtime_info,
 )
+from agentmemory.runtime.transport import validate_delete_request, validate_update_request
 from agentmemory.providers.base import (
     ProviderConfigurationError,
     ProviderScopeRequiredError,
@@ -65,6 +68,10 @@ def _unwrap_records(payload: Any) -> list[dict[str, Any]]:
         if "id" in payload or "memory_id" in payload:
             return [payload]
     return []
+
+
+def _unexpired_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return lifecycle_module.filter_unexpired(records)
 
 
 def _record_key(memory_id: str) -> str:
@@ -179,7 +186,7 @@ def list_admin_memories(
         raise
     except Exception as exc:
         raise ProviderUnavailableError(str(exc)) from exc
-    records = _unwrap_records(raw_records)
+    records = _unexpired_records(_unwrap_records(raw_records))
     normalized = [_normalize_memory_record(record) for record in records]
     if archived is None and not include_archived:
         archived = False
@@ -190,9 +197,10 @@ def list_admin_memories(
 def get_admin_memory(memory_id: str) -> dict[str, Any]:
     payload = memory_get(memory_id)
     records = _unwrap_records(payload)
+    records = _unexpired_records(records)
     if records:
         return _normalize_memory_record(records[0])
-    if isinstance(payload, dict):
+    if isinstance(payload, dict) and not lifecycle_module.is_expired(payload):
         return _normalize_memory_record(payload)
     raise KeyError(memory_id)
 
@@ -206,6 +214,7 @@ def update_admin_memory(
     archived: bool | None = None,
 ) -> dict[str, Any]:
     if memory is not None or metadata is not None:
+        validate_update_request(provider_name=active_provider_name(), capabilities=active_provider_capabilities())
         current = memory_get(memory_id)
         next_memory = memory if memory is not None else current.get("memory") or ""
         next_metadata = metadata if metadata is not None else current.get("metadata")
@@ -226,6 +235,7 @@ def pin_admin_memory(memory_id: str, *, pinned: bool = True) -> dict[str, Any]:
 
 
 def delete_admin_memory(memory_id: str) -> dict[str, Any]:
+    validate_delete_request(provider_name=active_provider_name(), capabilities=active_provider_capabilities())
     result = memory_delete(memory_id=memory_id)
     _remove_overlay(memory_id)
     return result

@@ -196,6 +196,23 @@ class InMemoryContractProvider(BaseMemoryProvider):
         }
 
 
+class ReadOnlyContractProvider(InMemoryContractProvider):
+    provider_name = "readonly-contract"
+    display_name = "ReadOnly Contract"
+
+    def capabilities(self) -> ProviderCapabilities:
+        capabilities = dict(super().capabilities())
+        capabilities["supports_update"] = False
+        capabilities["supports_delete"] = False
+        return capabilities  # type: ignore[return-value]
+
+    def update_memory(self, *, memory_id, data, metadata=None) -> MemoryRecord:
+        return BaseMemoryProvider.update_memory(self, memory_id=memory_id, data=data, metadata=metadata)
+
+    def delete_memory(self, *, memory_id) -> DeleteResult:
+        return BaseMemoryProvider.delete_memory(self, memory_id=memory_id)
+
+
 class InMemoryContractProviderHarnessTests(ProviderContractHarness, unittest.TestCase):
     def create_provider(self, runtime_dir: str):
         return InMemoryContractProvider(
@@ -211,3 +228,11 @@ class InMemoryContractProviderHarnessTests(ProviderContractHarness, unittest.Tes
 
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["metadata"]["topic"], "docs")
+
+
+class ReadOnlyContractProviderHarnessTests(ProviderContractHarness, unittest.TestCase):
+    def create_provider(self, runtime_dir: str):
+        return ReadOnlyContractProvider(
+            runtime_config={"runtime_dir": runtime_dir},
+            provider_config=ReadOnlyContractProvider.default_provider_config(runtime_dir=runtime_dir),
+        )

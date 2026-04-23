@@ -189,6 +189,31 @@ class AgentMemoryHttpClientTests(unittest.TestCase):
         self.assertIn("kind=user", str(captured["path"]))
         self.assertIn("query=def", str(captured["path"]))
 
+    def test_proxy_list_scopes_page_encodes_cursor_and_query_params(self) -> None:
+        original_ensure_api_running = agentmemory_http_client.ensure_api_running
+        original_request = agentmemory_http_client._request
+        captured: dict[str, object] = {}
+        try:
+            agentmemory_http_client.ensure_api_running = lambda: None  # type: ignore[assignment]
+
+            def fake_request(method: str, path: str, payload=None):
+                captured["method"] = method
+                captured["path"] = path
+                return {"items": [], "next_cursor": None}
+
+            agentmemory_http_client._request = fake_request  # type: ignore[assignment]
+            agentmemory_http_client.proxy_list_scopes_page(limit=25, cursor="opaque", kind="user", query="def")
+        finally:
+            agentmemory_http_client.ensure_api_running = original_ensure_api_running  # type: ignore[assignment]
+            agentmemory_http_client._request = original_request  # type: ignore[assignment]
+
+        self.assertEqual(captured["method"], "GET")
+        self.assertIn("/admin/scopes/page?", str(captured["path"]))
+        self.assertIn("limit=25", str(captured["path"]))
+        self.assertIn("cursor=opaque", str(captured["path"]))
+        self.assertIn("kind=user", str(captured["path"]))
+        self.assertIn("query=def", str(captured["path"]))
+
     def test_proxy_methods_send_configured_api_token(self) -> None:
         original_ensure_api_running = agentmemory_http_client.ensure_api_running
         original_urlopen = agentmemory_http_client.urlopen
@@ -224,6 +249,7 @@ class AgentMemoryHttpClientTests(unittest.TestCase):
                 lambda: agentmemory_http_client.proxy_update(memory_id="mem-1", data="updated"),
                 lambda: agentmemory_http_client.proxy_delete(memory_id="mem-1"),
                 lambda: agentmemory_http_client.proxy_list_scopes(limit=10),
+                lambda: agentmemory_http_client.proxy_list_scopes_page(limit=10),
             ]
             for call in proxy_calls:
                 call()
@@ -235,8 +261,8 @@ class AgentMemoryHttpClientTests(unittest.TestCase):
             else:
                 os.environ["AGENTMEMORY_API_TOKEN"] = original_token
 
-        self.assertEqual(len(captured_authorization_headers), 8)
-        self.assertEqual(captured_authorization_headers, ["Bearer internal-token"] * 8)
+        self.assertEqual(len(captured_authorization_headers), 9)
+        self.assertEqual(captured_authorization_headers, ["Bearer internal-token"] * 9)
 
     def test_proxy_add_and_search_require_explicit_capability_sensitive_flags(self) -> None:
         with self.assertRaises(TypeError):

@@ -88,6 +88,11 @@ Examples:
 
 If a provider cannot reliably support a feature, it must declare that feature unsupported.
 
+Unsupported update/delete is valid for provider classes where record mutation
+does not map cleanly to the backend. In that case, the provider must declare
+`supports_update = False` or `supports_delete = False` and raise
+`ProviderCapabilityError` for those operations.
+
 ### Pagination Contract
 
 Providers that declare `supports_pagination = True` must implement stable cursor pagination for `list_memories_page`.
@@ -110,6 +115,21 @@ Rules:
 - Shared layers must not inspect provider-private storage to emulate pagination.
 
 Provider-neutral export uses `list_memories_page(...)` when `supports_pagination = True`. If a provider does not support pagination, export intentionally remains guarded by the fixed legacy limit so it cannot silently truncate data.
+
+### Scope Registry Contract
+
+Providers that declare `supports_scope_inventory = True` must maintain the
+AgentMemory-owned scope registry on successful add/update/delete operations.
+`list_scopes` should read from that registry, not from provider-private storage
+or backend internals.
+
+Rules:
+
+- the primary provider store remains the source of truth
+- registry sync is a rebuildable index update
+- registry sync failure after a successful primary write must be recorded as degraded diagnostics, not returned as a failed write
+- a successful rebuild or later successful sync clears degraded registry state
+- legacy backend scans are acceptable only as explicit rebuild seed paths
 
 ### 5. Scope Semantics
 

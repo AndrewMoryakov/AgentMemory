@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import base64
 from datetime import datetime, timezone
 import json
 import os
@@ -8,7 +9,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterator
 
-from agentmemory.providers.base import MemoryRecord, ProviderValidationError, ScopeInventory, ScopeInventoryItem
+from agentmemory.providers.base import MemoryRecord, ProviderValidationError, ScopeInventory, ScopeInventoryItem, ScopeInventoryPage
 from agentmemory.runtime.atomic_io import atomic_write_json
 
 if os.name == "nt":
@@ -24,11 +25,19 @@ CREATE TABLE IF NOT EXISTS scope_registry (
     user_id TEXT,
     agent_id TEXT,
     run_id TEXT,
+    expires_at TEXT,
     created_at TEXT,
     updated_at TEXT,
     PRIMARY KEY (provider, memory_id)
 )
 """
+
+_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_scope_registry_provider_user ON scope_registry(provider, user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_scope_registry_provider_agent ON scope_registry(provider, agent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_scope_registry_provider_run ON scope_registry(provider, run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_scope_registry_provider_expires ON scope_registry(provider, expires_at)",
+)
 
 
 def utc_now() -> str:
@@ -95,6 +104,12 @@ def _connect(runtime_dir: str) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(path, timeout=10.0)
     connection.execute("PRAGMA busy_timeout = 10000")
     connection.execute(_SCHEMA)
+    for statement in _INDEXES:
+        connection.execute(statement)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(scope_registry)").fetchall()}
+    if "expires_at" not in columns:
+        connection.execute("ALTER TABLE scope_registry ADD COLUMN expires_at TEXT")
+        connection.commit()
     try:
         yield connection
     finally:
@@ -118,13 +133,37 @@ def _scope_value(record: MemoryRecord, field_name: str) -> str | None:
     return stripped or None
 
 
-def _normalized_row(provider_name: str, record: MemoryRecord) -> tuple[str, str, str | None, str | None, str | None, str | None, str | None]:
+def _metadata_expires_at(record: MemoryRecord) -> str | None:
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    expires_at = metadata.get("expires_at")
+    return expires_at if isinstance(expires_at, str) and expires_at.strip() else None
+
+
+def _parse_expires_at(value: str) -> datetime | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if stripped.endswith("Z"):
+        stripped = stripped[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(stripped)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalized_row(provider_name: str, record: MemoryRecord) -> tuple[str, str, str | None, str | None, str | None, str | None, str | None, str | None]:
     return (
         provider_name,
         _memory_id(record),
         _scope_value(record, "user_id"),
         _scope_value(record, "agent_id"),
         _scope_value(record, "run_id"),
+        _metadata_expires_at(record),
         record.get("created_at") if isinstance(record.get("created_at"), str) else None,
         record.get("updated_at") if isinstance(record.get("updated_at"), str) else None,
     )
@@ -136,12 +175,13 @@ def upsert_record(provider_name: str, record: MemoryRecord, runtime_dir: str) ->
         connection.execute(
             """
             INSERT INTO scope_registry (
-                provider, memory_id, user_id, agent_id, run_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                provider, memory_id, user_id, agent_id, run_id, expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(provider, memory_id) DO UPDATE SET
                 user_id = excluded.user_id,
                 agent_id = excluded.agent_id,
                 run_id = excluded.run_id,
+                expires_at = excluded.expires_at,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at
             """,
@@ -167,8 +207,8 @@ def replace_provider_records(provider_name: str, records: list[MemoryRecord], ru
             connection.executemany(
                 """
                 INSERT INTO scope_registry (
-                    provider, memory_id, user_id, agent_id, run_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    provider, memory_id, user_id, agent_id, run_id, expires_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -181,12 +221,52 @@ def replace_provider_records(provider_name: str, records: list[MemoryRecord], ru
     }
 
 
+def list_expired_memory_ids(provider_name: str, runtime_dir: str, *, now: datetime | None = None) -> list[str]:
+    snapshot_now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    with _connect(runtime_dir) as connection:
+        rows = connection.execute(
+            """
+            SELECT memory_id, expires_at
+            FROM scope_registry
+            WHERE provider = ? AND expires_at IS NOT NULL AND expires_at != ''
+            """,
+            (provider_name,),
+        ).fetchall()
+    expired_ids: list[str] = []
+    for memory_id, expires_at in rows:
+        if not isinstance(memory_id, str) or not isinstance(expires_at, str):
+            continue
+        expires_dt = _parse_expires_at(expires_at)
+        if expires_dt is not None and expires_dt <= snapshot_now:
+            expired_ids.append(memory_id)
+    return expired_ids
+
+
 def _scope_kind_field(kind: str) -> str:
     field_map = {"user": "user_id", "agent": "agent_id", "run": "run_id"}
     try:
         return field_map[kind]
     except KeyError as exc:
         raise ProviderValidationError("Scope kind must be one of: user, agent, run.") from exc
+
+
+def _encode_cursor(offset: int) -> str:
+    payload = json.dumps({"offset": offset}, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(cursor: str | None) -> int:
+    if cursor is None:
+        return 0
+    try:
+        padded = cursor + ("=" * (-len(cursor) % 4))
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        offset = int(payload["offset"])
+    except Exception as exc:
+        raise ProviderValidationError("Invalid scope inventory cursor.") from exc
+    if offset < 0:
+        raise ProviderValidationError("Invalid scope inventory cursor.")
+    return offset
 
 
 def mark_sync_failed(
@@ -245,48 +325,192 @@ def scope_registry_status(provider_name: str, runtime_dir: str) -> dict[str, Any
     return current
 
 
+def _inventory_items_and_totals(
+    provider_name: str,
+    kind: str | None,
+    query: str | None,
+    runtime_dir: str,
+) -> tuple[list[ScopeInventoryItem], dict[str, int]]:
+    if kind is not None:
+        _scope_kind_field(kind)
+    params: list[Any] = []
+    query_clause = ""
+    if isinstance(query, str) and query:
+        query_clause = " AND lower({field}) LIKE ?"
+        params.append(f"%{query.lower()}%")
+
+    inventory_sql_parts: list[str] = []
+    inventory_params: list[Any] = []
+    for selected_kind, field_name in (("user", "user_id"), ("agent", "agent_id"), ("run", "run_id")):
+        clause = query_clause.format(field=field_name) if query_clause else ""
+        inventory_sql_parts.append(
+            f"""
+            SELECT
+                '{selected_kind}' AS kind,
+                {field_name} AS value,
+                COUNT(*) AS count,
+                MAX(COALESCE(updated_at, created_at)) AS last_seen_at
+            FROM scope_registry
+            WHERE provider = ?
+              AND {field_name} IS NOT NULL
+              AND TRIM({field_name}) != ''
+              {clause}
+            GROUP BY {field_name}
+            """
+        )
+        inventory_params.append(provider_name)
+        inventory_params.extend(params)
+
+    inventory_sql = " UNION ALL ".join(inventory_sql_parts)
+    filter_sql = " WHERE kind = ?" if kind is not None else ""
+    filter_params: list[Any] = [kind] if kind is not None else []
+
+    with _connect(runtime_dir) as connection:
+        item_rows = connection.execute(
+            f"""
+            WITH inventory AS (
+                {inventory_sql}
+            )
+            SELECT kind, value, count, last_seen_at
+            FROM inventory
+            {filter_sql}
+            ORDER BY kind ASC, count DESC, value ASC
+            """,
+            inventory_params + filter_params,
+        ).fetchall()
+        totals_row = connection.execute(
+            f"""
+            WITH inventory AS (
+                {inventory_sql}
+            )
+            SELECT
+                SUM(CASE WHEN kind = 'user' THEN 1 ELSE 0 END) AS users,
+                SUM(CASE WHEN kind = 'agent' THEN 1 ELSE 0 END) AS agents,
+                SUM(CASE WHEN kind = 'run' THEN 1 ELSE 0 END) AS runs
+            FROM inventory
+            """,
+            inventory_params,
+        ).fetchone()
+
+    items: list[ScopeInventoryItem] = [
+        {
+            "kind": row[0],
+            "value": row[1],
+            "count": row[2],
+            "last_seen_at": row[3],
+        }
+        for row in item_rows
+        if isinstance(row[0], str) and isinstance(row[1], str) and isinstance(row[2], int)
+    ]
+    totals = {
+        "users": int(totals_row[0] or 0) if totals_row else 0,
+        "agents": int(totals_row[1] or 0) if totals_row else 0,
+        "runs": int(totals_row[2] or 0) if totals_row else 0,
+    }
+    return items, totals
+
+
 def list_inventory(provider_name: str, limit: int, kind: str | None, query: str | None, runtime_dir: str) -> ScopeInventory:
+    items, totals = _inventory_items_and_totals(provider_name, kind, query, runtime_dir)
+    return {"provider": provider_name, "items": items[:limit], "totals": totals}
+
+
+def list_inventory_page(
+    provider_name: str,
+    *,
+    limit: int,
+    cursor: str | None,
+    kind: str | None,
+    query: str | None,
+    runtime_dir: str,
+) -> ScopeInventoryPage:
+    if limit < 1:
+        raise ProviderValidationError("Scope inventory page limit must be at least 1.")
+    offset = _decode_cursor(cursor)
     if kind is not None:
         _scope_kind_field(kind)
 
-    query_l = query.lower() if isinstance(query, str) and query else None
-    with _connect(runtime_dir) as connection:
-        rows = connection.execute(
-            """
-            SELECT user_id, agent_id, run_id, created_at, updated_at
+    params: list[Any] = []
+    query_clause = ""
+    if isinstance(query, str) and query:
+        query_clause = " AND lower({field}) LIKE ?"
+        params.append(f"%{query.lower()}%")
+
+    inventory_sql_parts: list[str] = []
+    inventory_params: list[Any] = []
+    for selected_kind, field_name in (("user", "user_id"), ("agent", "agent_id"), ("run", "run_id")):
+        clause = query_clause.format(field=field_name) if query_clause else ""
+        inventory_sql_parts.append(
+            f"""
+            SELECT
+                '{selected_kind}' AS kind,
+                {field_name} AS value,
+                COUNT(*) AS count,
+                MAX(COALESCE(updated_at, created_at)) AS last_seen_at
             FROM scope_registry
             WHERE provider = ?
-            """,
-            (provider_name,),
-        ).fetchall()
+              AND {field_name} IS NOT NULL
+              AND TRIM({field_name}) != ''
+              {clause}
+            GROUP BY {field_name}
+            """
+        )
+        inventory_params.append(provider_name)
+        inventory_params.extend(params)
+    inventory_sql = " UNION ALL ".join(inventory_sql_parts)
+    filter_sql = " WHERE kind = ?" if kind is not None else ""
+    filter_params: list[Any] = [kind] if kind is not None else []
 
-    buckets: dict[tuple[str, str], ScopeInventoryItem] = {}
-    field_map = {"user": 0, "agent": 1, "run": 2}
-
-    for row in rows:
-        created_at = row[3]
-        updated_at = row[4]
-        for selected_kind, index in field_map.items():
-            value = row[index]
-            if not isinstance(value, str) or not value.strip():
-                continue
-            if query_l and query_l not in value.lower():
-                continue
-            key = (selected_kind, value)
-            item = buckets.setdefault(
-                key,
-                {"kind": selected_kind, "value": value, "count": 0, "last_seen_at": None},
+    with _connect(runtime_dir) as connection:
+        page_rows = connection.execute(
+            f"""
+            WITH inventory AS (
+                {inventory_sql}
             )
-            item["count"] += 1
-            timestamp = updated_at or created_at
-            if isinstance(timestamp, str) and timestamp and (item["last_seen_at"] is None or timestamp > item["last_seen_at"]):
-                item["last_seen_at"] = timestamp
-
-    all_items = sorted(buckets.values(), key=lambda item: (item["kind"], -item["count"], item["value"]))
-    items = [item for item in all_items if kind is None or item["kind"] == kind]
+            SELECT kind, value, count, last_seen_at
+            FROM inventory
+            {filter_sql}
+            ORDER BY kind ASC, count DESC, value ASC
+            LIMIT ? OFFSET ?
+            """,
+            inventory_params + filter_params + [limit + 1, offset],
+        ).fetchall()
+        totals_row = connection.execute(
+            f"""
+            WITH inventory AS (
+                {inventory_sql}
+            )
+            SELECT
+                SUM(CASE WHEN kind = 'user' THEN 1 ELSE 0 END) AS users,
+                SUM(CASE WHEN kind = 'agent' THEN 1 ELSE 0 END) AS agents,
+                SUM(CASE WHEN kind = 'run' THEN 1 ELSE 0 END) AS runs
+            FROM inventory
+            """,
+            inventory_params,
+        ).fetchone()
+    has_more = len(page_rows) > limit
+    materialized_rows = page_rows[:limit]
+    page_items: list[ScopeInventoryItem] = [
+        {
+            "kind": row[0],
+            "value": row[1],
+            "count": row[2],
+            "last_seen_at": row[3],
+        }
+        for row in materialized_rows
+        if isinstance(row[0], str) and isinstance(row[1], str) and isinstance(row[2], int)
+    ]
+    next_offset = offset + len(page_items)
+    next_cursor = _encode_cursor(next_offset) if has_more else None
     totals = {
-        "users": sum(1 for item in all_items if item["kind"] == "user"),
-        "agents": sum(1 for item in all_items if item["kind"] == "agent"),
-        "runs": sum(1 for item in all_items if item["kind"] == "run"),
+        "users": int(totals_row[0] or 0) if totals_row else 0,
+        "agents": int(totals_row[1] or 0) if totals_row else 0,
+        "runs": int(totals_row[2] or 0) if totals_row else 0,
     }
-    return {"provider": provider_name, "items": items[:limit], "totals": totals}
+    return {
+        "provider": provider_name,
+        "items": page_items,
+        "totals": totals,
+        "next_cursor": next_cursor,
+        "pagination_supported": True,
+    }

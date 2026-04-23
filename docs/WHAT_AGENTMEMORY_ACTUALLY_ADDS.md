@@ -206,13 +206,32 @@ These map correctly across CLI, HTTP, and MCP. The client gets the same semantic
 
 **Mem0 raises its own exceptions** (or wraps them inconsistently). The client must interpret backend-specific error messages.
 
-### 10. Scope Inventory
+### 10. Optional Lifecycle Support
+
+AgentMemory supports lifecycle metadata such as:
+
+- `metadata.ttl_seconds`
+- `metadata.expires_at`
+
+The important boundary is this:
+
+- callers decide whether to use expiry
+- the runtime enforces expiry consistently across transports
+- the runtime does not decide which memories should be temporary
+
+This is runtime support for a declared contract, not automatic memory-policy
+classification.
+
+### 11. Scope Inventory
 
 ```bash
 agentmemory list-scopes --kind user --limit 20
 ```
 
-AgentMemory can enumerate all known users, agents, and runs from the backend's storage (including direct Qdrant SQLite inspection for mem0).
+AgentMemory can enumerate all known users, agents, and runs through its own
+scope registry. Normal runtime reads do not need to inspect provider-private
+storage. For legacy `mem0` data, backend inspection is reserved for the
+explicit one-shot `rebuild-scope-registry` migration path.
 
 **Mem0 does not expose a scope inventory API.** You must track scopes externally or query storage internals yourself.
 
@@ -230,6 +249,7 @@ AgentMemory can enumerate all known users, agents, and runs from the backend's s
 | Backend swapping | ❌ | ✅ | Only if you plan to migrate |
 | Browser UI | ❌ | ✅ | Only if you want visual inspection |
 | Scope discovery | ❌ | ✅ | Only if you need to enumerate users/agents/runs |
+| Optional lifecycle enforcement | ❌ | ✅ | Only if your caller wants expiry metadata enforced consistently |
 | Provider capability declarations | ❌ | ✅ | Only if clients need to know constraints ahead of time |
 | Client auto-configuration | ❌ | ✅ | Only if you want one-command setup |
 

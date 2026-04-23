@@ -63,6 +63,23 @@ class RateLimitExceeded(ProviderError):
     pass
 
 
+def _parse_int_query_param(
+    params: dict[str, list[str]],
+    name: str,
+    *,
+    default: int,
+    minimum: int | None = None,
+) -> int:
+    raw = (params.get(name) or [str(default)])[0]
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ProviderValidationError(f"Query parameter '{name}' must be an integer.") from exc
+    if minimum is not None and value < minimum:
+        raise ProviderValidationError(f"Query parameter '{name}' must be at least {minimum}.")
+    return value
+
+
 class _TokenBucketLimiter:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -495,7 +512,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_rate_limit(self._rate_limit_key()):
                 return
             if parsed.path == "/admin/stats":
-                self._send(200, admin_stats(limit=int(params.get("limit", [500])[0])))
+                self._send(200, admin_stats(limit=_parse_int_query_param(params, "limit", default=500, minimum=1)))
                 return
             if parsed.path == "/admin/stats/operations":
                 self._send(200, metrics_registry.summary())
@@ -503,17 +520,21 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/admin/scopes":
                 self._send(200, OPERATIONS["list_scopes"].execute(http_operation_source("list_scopes", query_params=params)))
                 return
+            if parsed.path == "/admin/scopes/page":
+                self._send(200, OPERATIONS["list_scopes_page"].execute(http_operation_source("list_scopes_page", query_params=params)))
+                return
             if parsed.path == "/admin/clients":
                 self._send(200, admin_stats(limit=50).get("clients", {}))
                 return
             if parsed.path == "/admin/memories":
+                limit = _parse_int_query_param(params, "limit", default=100, minimum=1)
                 try:
                     result = list_admin_memories(
                         query=params.get("query", [None])[0],
                         user_id=params.get("user_id", [None])[0],
                         agent_id=params.get("agent_id", [None])[0],
                         run_id=params.get("run_id", [None])[0],
-                        limit=int(params.get("limit", [100])[0]),
+                        limit=limit,
                         pinned={"true": True, "false": False}.get((params.get("pinned", [None])[0] or "").lower()),
                         archived={"true": True, "false": False}.get((params.get("archived", [None])[0] or "").lower()),
                         include_archived=(params.get("include_archived", ["false"])[0].lower() == "true"),
@@ -720,6 +741,7 @@ def _start_ttl_sweeper() -> None:
         from agentmemory.runtime.config import (
             memory_delete as _memory_delete,
             memory_list as _memory_list,
+            memory_list_expired_ids as _memory_list_expired_ids,
             memory_list_scopes as _memory_list_scopes,
         )
     except Exception:
@@ -729,6 +751,7 @@ def _start_ttl_sweeper() -> None:
             list_scopes=_memory_list_scopes,
             list_memories=_memory_list,
             delete_memory=_memory_delete,
+            list_expired_memory_ids=_memory_list_expired_ids,
         )
     except Exception:
         pass

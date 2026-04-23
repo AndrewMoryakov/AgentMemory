@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentmemory.providers.base import MemoryPage, MemoryRecord, ProviderValidationError
+from agentmemory.runtime import lifecycle as lifecycle_module
 from agentmemory.runtime.config import (
     active_provider_capabilities,
     active_provider_name,
@@ -12,12 +13,14 @@ from agentmemory.runtime.config import (
     memory_list,
     memory_list_page,
     memory_list_scopes,
+    memory_list_scopes_page,
 )
 
 
 EXPORT_SCOPE_LIMIT = 10_000
 EXPORT_RECORD_LIMIT = 10_000
 EXPORT_PAGE_SIZE = 500
+EXPORT_SCOPE_PAGE_SIZE = 500
 EXPORTED_RECORD_KEYS = (
     "id",
     "memory",
@@ -110,6 +113,8 @@ def _iter_page_records(
             filters=filters,
         )
         records = page.get("items", [])
+        if isinstance(records, list):
+            records = lifecycle_module.filter_unexpired(records)
         if not supports_pagination and len(records) >= EXPORT_RECORD_LIMIT:
             raise ProviderValidationError(
                 "Export may be truncated because the provider does not support pagination "
@@ -131,12 +136,33 @@ def _collect_export_records(
     provider_name: str | None = None,
     capabilities: dict[str, Any] | None = None,
     list_scopes: Callable[..., dict[str, Any]] | None = None,
+    list_scopes_page: Callable[..., dict[str, Any]] | None = None,
     list_memories: Callable[..., list[MemoryRecord]] | None = None,
     list_page: Callable[..., MemoryPage] | None = None,
 ) -> tuple[str, list[dict[str, Any]], int, bool, bool]:
     provider_name = provider_name or active_provider_name()
     capabilities = capabilities or active_provider_capabilities()
-    list_scopes = list_scopes or memory_list_scopes
+    if list_scopes_page is None and list_scopes is not None:
+        def legacy_scope_page(*, limit=EXPORT_SCOPE_LIMIT, cursor=None, kind=None, query=None):
+            if cursor is not None:
+                raise ProviderValidationError("Provider does not support paginated scope inventory cursors.")
+            inventory = list_scopes(limit=EXPORT_SCOPE_LIMIT, kind=kind, query=query)
+            items = inventory.get("items", [])
+            if len(items) >= EXPORT_SCOPE_LIMIT:
+                raise ProviderValidationError(
+                    "Export may be truncated because scope inventory reached the current export limit. "
+                    "Scope pagination is required before larger exports are safe."
+                )
+            return {
+                "provider": inventory.get("provider", provider_name),
+                "items": items[:limit],
+                "totals": inventory.get("totals", {}),
+                "next_cursor": None,
+                "pagination_supported": False,
+            }
+
+        list_scopes_page = legacy_scope_page
+    list_scopes_page = list_scopes_page or memory_list_scopes_page
     list_memories = list_memories or memory_list
     supports_pagination = bool(capabilities.get("supports_pagination"))
     page_reader = list_page or (
@@ -144,33 +170,32 @@ def _collect_export_records(
         if supports_pagination
         else lambda **kwargs: _legacy_list_page(list_memories=list_memories, provider_name=provider_name, **kwargs)
     )
-    inventory = list_scopes(limit=EXPORT_SCOPE_LIMIT)
-    items = inventory.get("items", [])
-    if len(items) >= EXPORT_SCOPE_LIMIT:
-        raise ProviderValidationError(
-            "Export may be truncated because scope inventory reached the current export limit. "
-            "Scope pagination is required before larger exports are safe."
-        )
-
     seen: dict[str, dict[str, Any]] = {}
     scoped_passes = 0
-    for item in items:
-        kind = item.get("kind")
-        value = item.get("value")
-        if kind not in {"user", "agent", "run"} or not isinstance(value, str) or not value:
-            continue
-        scoped_passes += 1
-        records = _iter_page_records(
-            provider_name=provider_name,
-            list_page=page_reader,
-            supports_pagination=supports_pagination,
-            **{f"{kind}_id": value},
-        )
-        for record in records:
-            seen.setdefault(
-                _record_identity(record),
-                record,
+    scope_cursor: str | None = None
+    while True:
+        inventory = list_scopes_page(limit=EXPORT_SCOPE_PAGE_SIZE, cursor=scope_cursor)
+        items = inventory.get("items", [])
+        for item in items:
+            kind = item.get("kind")
+            value = item.get("value")
+            if kind not in {"user", "agent", "run"} or not isinstance(value, str) or not value:
+                continue
+            scoped_passes += 1
+            records = _iter_page_records(
+                provider_name=provider_name,
+                list_page=page_reader,
+                supports_pagination=supports_pagination,
+                **{f"{kind}_id": value},
             )
+            for record in records:
+                seen.setdefault(
+                    _record_identity(record),
+                    record,
+                )
+        scope_cursor = inventory.get("next_cursor")
+        if not scope_cursor:
+            break
 
     included_scopeless = False
     if capabilities.get("supports_scopeless_list"):
@@ -204,6 +229,7 @@ def export_memories(
     provider_name: str | None = None,
     capabilities: dict[str, Any] | None = None,
     list_scopes: Callable[..., dict[str, Any]] | None = None,
+    list_scopes_page: Callable[..., dict[str, Any]] | None = None,
     list_memories: Callable[..., list[MemoryRecord]] | None = None,
     list_page: Callable[..., MemoryPage] | None = None,
 ) -> dict[str, Any]:
@@ -213,6 +239,7 @@ def export_memories(
         provider_name=provider_name,
         capabilities=capabilities,
         list_scopes=list_scopes,
+        list_scopes_page=list_scopes_page,
         list_memories=list_memories,
         list_page=list_page,
     )

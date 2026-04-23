@@ -13,7 +13,12 @@
 # Usage (on the server):
 #   cd /opt/agentmemory
 #   cp .env.example .env && edit .env
-#   docker compose -f deploy/docker-compose.yml up -d --build
+#   deploy/redeploy.sh
+#
+# Do not "simplify" deploys back to raw `docker compose up` without reading
+# docs/COMPOSE_V2_NETWORK_DRIFT.md first. This stack depends on an external
+# network (`netbird_netbird`), and Compose v2 has been observed on the target
+# host bringing the container back without that declared attachment.
 
 services:
   agentmemory:

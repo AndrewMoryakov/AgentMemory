@@ -133,12 +133,19 @@ def _collect_expired_ids(
     *,
     list_scopes: Callable[..., dict[str, Any]],
     list_memories: Callable[..., Any],
+    list_expired_memory_ids: Callable[..., list[str]] | None = None,
 ) -> list[str]:
     """Walk the scope inventory and return ids of expired memories.
 
-    Uses the runtime's existing list_scopes + list_memories so it works
-    for any provider that advertises scope inventory.
+    Prefer the registry-backed TTL index when available. The legacy
+    list_scopes + list_memories walk remains as a compatibility fallback.
     """
+    if list_expired_memory_ids is not None:
+        try:
+            return _unique_ids(list_expired_memory_ids())
+        except Exception:
+            return []
+
     expired_ids: list[str] = []
     now = utc_now()
     try:
@@ -165,12 +172,17 @@ def _collect_expired_ids(
                 record_id = record.get("id")
                 if isinstance(record_id, str):
                     expired_ids.append(record_id)
-    # De-dupe preserving order — the same record can appear under multiple
-    # scopes (e.g. both user_id and agent_id).
+    return _unique_ids(expired_ids)
+
+
+def _unique_ids(record_ids: Iterable[str]) -> list[str]:
+    # De-dupe preserving order. The same record can appear under multiple
+    # scopes (e.g. both user_id and agent_id), and registry rebuilds may
+    # preserve provider duplicates defensively.
     seen: set[str] = set()
     unique_ids = []
-    for record_id in expired_ids:
-        if record_id not in seen:
+    for record_id in record_ids:
+        if isinstance(record_id, str) and record_id not in seen:
             seen.add(record_id)
             unique_ids.append(record_id)
     return unique_ids
@@ -181,9 +193,14 @@ def run_sweep_once(
     list_scopes: Callable[..., dict[str, Any]],
     list_memories: Callable[..., Any],
     delete_memory: Callable[..., Any],
+    list_expired_memory_ids: Callable[..., list[str]] | None = None,
 ) -> dict[str, Any]:
     """Delete every expired memory once. Returns a summary for logs / metrics."""
-    ids = _collect_expired_ids(list_scopes=list_scopes, list_memories=list_memories)
+    ids = _collect_expired_ids(
+        list_scopes=list_scopes,
+        list_memories=list_memories,
+        list_expired_memory_ids=list_expired_memory_ids,
+    )
     deleted = 0
     errors = 0
     for memory_id in ids:
@@ -200,6 +217,7 @@ def start_sweeper_thread(
     list_scopes: Callable[..., dict[str, Any]],
     list_memories: Callable[..., Any],
     delete_memory: Callable[..., Any],
+    list_expired_memory_ids: Callable[..., list[str]] | None = None,
     interval_seconds: int | None = None,
 ) -> threading.Thread | None:
     interval = sweep_interval_seconds() if interval_seconds is None else interval_seconds
@@ -216,6 +234,7 @@ def start_sweeper_thread(
                     list_scopes=list_scopes,
                     list_memories=list_memories,
                     delete_memory=delete_memory,
+                    list_expired_memory_ids=list_expired_memory_ids,
                 )
             except Exception:
                 pass

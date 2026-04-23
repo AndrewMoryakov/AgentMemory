@@ -27,6 +27,7 @@ from agentmemory.providers.base import (
     ProviderRuntimePolicy,
     ProviderValidationError,
     ScopeInventory,
+    ScopeInventoryPage,
 )
 from agentmemory.runtime import scope_registry
 
@@ -42,6 +43,18 @@ class LocalJsonProvider(BaseMemoryProvider):
     certification_status = "certified"
     expected_certification_status_code = "certified"
     certification_notes = "Built-in validation provider must stay fully certified."
+    certification_harness_classes = ("test_localjson_provider.LocalJsonProviderTests",)
+    certification_related_test_modules = (
+        "test_localjson_provider",
+        "test_provider_contract_v1",
+        "test_agentmemory_runtime",
+        "test_agentmemory_http_client",
+        "test_agentmemory_mcp_server",
+        "test_agentmemory_admin",
+        "test_agentmemory_core",
+    )
+    certification_policy_enabled = True
+    onboarding_order = 20
 
     @classmethod
     def default_provider_config(cls, *, runtime_dir: str) -> dict[str, Any]:
@@ -441,6 +454,23 @@ class LocalJsonProvider(BaseMemoryProvider):
 
     def list_scopes(self, *, limit: int = 200, kind: str | None = None, query: str | None = None) -> ScopeInventory:
         return scope_registry.list_inventory(self.provider_name, limit, kind, query, self.runtime_dir)
+
+    def list_scopes_page(
+        self,
+        *,
+        limit: int = 200,
+        cursor: str | None = None,
+        kind: str | None = None,
+        query: str | None = None,
+    ) -> ScopeInventoryPage:
+        return scope_registry.list_inventory_page(
+            self.provider_name,
+            limit=limit,
+            cursor=cursor,
+            kind=kind,
+            query=query,
+            runtime_dir=self.runtime_dir,
+        )
 
     def iter_scope_registry_seed_records(self) -> list[MemoryRecord]:
         with self._lock:

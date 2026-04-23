@@ -12,8 +12,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from agentmemory.providers.localjson import LocalJsonProvider
-from agentmemory.providers.mem0 import Mem0Provider
 from agentmemory.providers.base import (
     BaseMemoryProvider,
     MemoryPage,
@@ -23,6 +21,7 @@ from agentmemory.providers.base import (
     ProviderContract,
     ProviderRuntimePolicy,
 )
+from agentmemory.providers.registry import provider_class, provider_registry
 from agentmemory.runtime.atomic_io import atomic_write_json, atomic_write_text
 from agentmemory.runtime import scope_registry
 
@@ -109,20 +108,6 @@ def load_dotenv(env_path: Path = ENV_PATH, *, override: bool = False) -> dict[st
 
 
 load_dotenv()
-
-
-def provider_registry() -> dict[str, type[BaseMemoryProvider]]:
-    return {
-        "localjson": LocalJsonProvider,
-        "mem0": Mem0Provider,
-    }
-
-
-def provider_class(provider_name: str) -> type[BaseMemoryProvider]:
-    registry = provider_registry()
-    if provider_name not in registry:
-        raise ProviderConfigurationError(f"Unknown memory provider: {provider_name}")
-    return registry[provider_name]
 
 
 def clone_jsonable(value: Any) -> Any:
@@ -689,6 +674,15 @@ def memory_delete(*, memory_id):
 
 def memory_list_scopes(*, limit: int = 200, kind: str | None = None, query: str | None = None):
     return get_provider().list_scopes(limit=limit, kind=kind, query=query)
+
+
+def memory_list_scopes_page(*, limit: int = 200, cursor: str | None = None, kind: str | None = None, query: str | None = None):
+    return get_provider().list_scopes_page(limit=limit, cursor=cursor, kind=kind, query=query)
+
+
+def memory_list_expired_ids() -> list[str]:
+    provider = get_provider()
+    return scope_registry.list_expired_memory_ids(active_provider_name(), provider.runtime_dir)
 
 
 def rebuild_scope_registry() -> dict[str, Any]:

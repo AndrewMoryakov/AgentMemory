@@ -79,15 +79,24 @@ class ProviderContractHarness(ABC):
 
     def test_update_and_delete_follow_contract(self) -> None:
         created = self.create_memory("old text")
+        capabilities = self.provider.capabilities()
 
-        updated = self.provider.update_memory(memory_id=created["id"], data="new text", metadata={"v": 2})
-        deleted = self.provider.delete_memory(memory_id=created["id"])
+        if not capabilities["supports_update"]:
+            with self.assertRaises(ProviderCapabilityError):
+                self.provider.update_memory(memory_id=created["id"], data="new text", metadata={"v": 2})
+        else:
+            updated = self.provider.update_memory(memory_id=created["id"], data="new text", metadata={"v": 2})
+            self.assert_record_shape(updated)
+            self.assertEqual(updated["memory"], "new text")
+            self.assertEqual(updated["metadata"]["v"], 2)
 
-        self.assert_record_shape(updated)
-        self.assertEqual(updated["memory"], "new text")
-        self.assertEqual(updated["metadata"]["v"], 2)
-        self.assertTrue(deleted["deleted"])
-        self.assertEqual(deleted["provider"], self.provider.provider_name)
+        if not capabilities["supports_delete"]:
+            with self.assertRaises(ProviderCapabilityError):
+                self.provider.delete_memory(memory_id=created["id"])
+        else:
+            deleted = self.provider.delete_memory(memory_id=created["id"])
+            self.assertTrue(deleted["deleted"])
+            self.assertEqual(deleted["provider"], self.provider.provider_name)
 
     def test_capabilities_expose_v1_shape(self) -> None:
         capabilities = self.provider.capabilities()
@@ -165,15 +174,36 @@ class ProviderContractHarness(ABC):
         self.assertIn("totals", inventory)
         self.assertEqual(set(inventory["totals"].keys()), {"users", "agents", "runs"})
 
+    def test_list_scopes_page_returns_canonical_page_shape(self) -> None:
+        self.create_memory("prefers brutalist layouts")
+        page = self.provider.list_scopes_page(limit=1)
+
+        self.assertEqual(page["provider"], self.provider.provider_name)
+        self.assertIn("items", page)
+        self.assertIn("totals", page)
+        self.assertIn("next_cursor", page)
+        self.assertIn("pagination_supported", page)
+        self.assertEqual(set(page["totals"].keys()), {"users", "agents", "runs"})
+        self.assertLessEqual(len(page["items"]), 1)
+
     def test_missing_record_operations_raise_memory_not_found(self) -> None:
+        capabilities = self.provider.capabilities()
         with self.assertRaises(MemoryNotFoundError):
             self.provider.get_memory("missing")
 
-        with self.assertRaises(MemoryNotFoundError):
-            self.provider.update_memory(memory_id="missing", data="new")
+        if capabilities["supports_update"]:
+            with self.assertRaises(MemoryNotFoundError):
+                self.provider.update_memory(memory_id="missing", data="new")
+        else:
+            with self.assertRaises(ProviderCapabilityError):
+                self.provider.update_memory(memory_id="missing", data="new")
 
-        with self.assertRaises(MemoryNotFoundError):
-            self.provider.delete_memory(memory_id="missing")
+        if capabilities["supports_delete"]:
+            with self.assertRaises(MemoryNotFoundError):
+                self.provider.delete_memory(memory_id="missing")
+        else:
+            with self.assertRaises(ProviderCapabilityError):
+                self.provider.delete_memory(memory_id="missing")
 
     def test_unsupported_rerank_raises_capability_error_when_declared(self) -> None:
         capabilities = self.provider.capabilities()

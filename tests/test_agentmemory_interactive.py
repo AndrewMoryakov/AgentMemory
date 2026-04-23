@@ -89,6 +89,22 @@ class AgentMemoryInteractiveTests(unittest.TestCase):
         self.assertNotIn('sk-or-v1-secret', configure_argv)
         self.assertEqual(configure_stdin, 'sk-or-v1-secret')
 
+    def test_onboarding_rejects_unknown_provider_without_fallback(self) -> None:
+        prompts = iter(['unknown-provider'])
+        commands: list[tuple[list[str], str | None]] = []
+        messages: list[str] = []
+
+        result = agentmemory_interactive.run_onboarding(
+            self.make_context(),
+            prompt=lambda _text: next(prompts),
+            emit=messages.append,
+            run_command=lambda argv, stdin_text=None: commands.append((argv, stdin_text)) or 0,
+        )
+
+        self.assertEqual(result, 2)
+        self.assertEqual(commands, [])
+        self.assertTrue(any('Unknown provider: unknown-provider' in message for message in messages))
+
 
 if __name__ == '__main__':
     unittest.main()

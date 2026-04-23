@@ -141,6 +141,10 @@ These can still be integrated, but they usually require one of these strategies:
 - graph-aware provider implementation
 - hybrid storage design
 
+For these providers, unsupported `update` or `delete` may be legitimate. The
+provider should declare the capability as unsupported and return a typed
+`ProviderCapabilityError` rather than emulating unsafe mutation semantics.
+
 ## Provider Type 3: Hybrid Providers
 
 These expose both record-like and graph-like behavior.
@@ -204,10 +208,13 @@ Questions:
 - can records be fetched by id
 - do ids survive restarts
 - can update/delete operate on those ids
+- if update/delete are unsupported, can the provider fail those operations with typed capability errors
 
 Why it matters:
 
 Without stable ids, `get`, `update`, and `delete` become unreliable or expensive.
+For append-only, graph, or archive-like backends, it may be better to certify a
+smaller honest capability set than to fake record mutation.
 
 ## 3. What are its scope semantics
 
@@ -218,6 +225,11 @@ Questions:
 - does it support session/thread/run semantics
 - does it require scope for reads and writes
 - can it enumerate scopes
+
+Providers that advertise `supports_scope_inventory` must maintain the
+AgentMemory-owned scope registry on writes and read `list_scopes` from that
+registry. Backend-private storage scans should be used only as explicit
+rebuild/migration seed paths.
 
 Why it matters:
 

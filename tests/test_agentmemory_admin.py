@@ -1,9 +1,13 @@
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 import agentmemory.runtime.admin as agentmemory_admin
 import agentmemory.runtime.config as agentmemory_runtime
+from agentmemory.runtime import lifecycle as lifecycle_module
+from agentmemory.providers.base import ProviderCapabilityError
 
 
 class AgentMemoryAdminTests(unittest.TestCase):
@@ -71,6 +75,59 @@ class AgentMemoryAdminTests(unittest.TestCase):
         self.assertEqual(stats["provider"], "localjson")
         self.assertEqual(stats["totals"]["memories"], 2)
         self.assertEqual(stats["totals"]["pinned"], 1)
+
+    def test_admin_list_and_stats_filter_expired_memories(self) -> None:
+        now = lifecycle_module.utc_now()
+        agentmemory_runtime.memory_add(
+            messages=[{"role": "user", "content": "fresh"}],
+            user_id="demo",
+            metadata={"expires_at": (now + timedelta(seconds=60)).isoformat()},
+        )
+        expired = agentmemory_runtime.memory_add(
+            messages=[{"role": "user", "content": "expired"}],
+            user_id="demo",
+            metadata={"expires_at": (now - timedelta(seconds=1)).isoformat()},
+        )
+        self.assertIsInstance(expired["id"], str)
+
+        listed = agentmemory_admin.list_admin_memories(limit=20)
+        stats = agentmemory_admin.admin_stats(limit=20)
+
+        self.assertEqual([item["display_text"] for item in listed], ["fresh"])
+        self.assertEqual(stats["totals"]["memories"], 1)
+        self.assertEqual(stats["totals"]["pinned"], 0)
+
+    def test_admin_get_hides_expired_memory(self) -> None:
+        expired = agentmemory_runtime.memory_add(
+            messages=[{"role": "user", "content": "expired"}],
+            user_id="demo",
+            metadata={"expires_at": (lifecycle_module.utc_now() - timedelta(seconds=1)).isoformat()},
+        )
+
+        with self.assertRaises(KeyError):
+            agentmemory_admin.get_admin_memory(expired["id"])
+
+    def test_admin_update_rejects_provider_without_update_capability(self) -> None:
+        capabilities = agentmemory_runtime.active_provider_capabilities()
+        capabilities["supports_update"] = False
+
+        with (
+            mock.patch.object(agentmemory_admin, "active_provider_capabilities", return_value=capabilities),
+            mock.patch.object(agentmemory_admin, "memory_update", side_effect=AssertionError("should not update")),
+        ):
+            with self.assertRaises(ProviderCapabilityError):
+                agentmemory_admin.update_admin_memory("missing", memory="new")
+
+    def test_admin_delete_rejects_provider_without_delete_capability(self) -> None:
+        capabilities = agentmemory_runtime.active_provider_capabilities()
+        capabilities["supports_delete"] = False
+
+        with (
+            mock.patch.object(agentmemory_admin, "active_provider_capabilities", return_value=capabilities),
+            mock.patch.object(agentmemory_admin, "memory_delete", side_effect=AssertionError("should not delete")),
+        ):
+            with self.assertRaises(ProviderCapabilityError):
+                agentmemory_admin.delete_admin_memory("missing")
 
 
 if __name__ == "__main__":

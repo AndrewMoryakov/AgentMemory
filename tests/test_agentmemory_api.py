@@ -119,6 +119,50 @@ class AgentMemoryApiTests(unittest.TestCase):
 
         self.assertEqual(captured, [(200, {"via": "registry", "limit": 25, "kind": "user", "query": "def"})])
 
+    def test_get_admin_scopes_page_uses_shared_operation_registry(self) -> None:
+        handler = self._make_handler(path="/admin/scopes/page?limit=25&cursor=opaque&kind=user&query=def")
+        captured: list[tuple[int, object]] = []
+        original_spec = agentmemory_api.OPERATIONS["list_scopes_page"]
+        try:
+            agentmemory_api.OPERATIONS["list_scopes_page"] = agentmemory_api.OPERATIONS["list_scopes_page"].__class__(
+                name="list_scopes_page",
+                mcp_name="memory_list_scopes_page",
+                title="List Scopes Page",
+                description="List one cursor page of known scopes.",
+                input_schema=original_spec.input_schema,
+                execute=lambda source: {"via": "registry", **source},
+            )
+            handler._send = lambda code, payload, headers=None: captured.append((code, payload))  # type: ignore[method-assign]
+            handler.do_GET()
+        finally:
+            agentmemory_api.OPERATIONS["list_scopes_page"] = original_spec
+
+        self.assertEqual(captured, [(200, {"via": "registry", "limit": 25, "cursor": "opaque", "kind": "user", "query": "def"})])
+
+    def test_admin_stats_rejects_invalid_limit_with_structured_400(self) -> None:
+        handler = self._make_handler(path="/admin/stats?limit=oops")
+        captured: list[tuple[int, object]] = []
+        handler._send = lambda status, payload, headers=None: captured.append((status, payload))  # type: ignore[assignment]
+
+        handler.do_GET()
+
+        self.assertEqual(
+            captured,
+            [(400, {"error_type": "ProviderValidationError", "message": "Query parameter 'limit' must be an integer.", "error": "Query parameter 'limit' must be an integer."})],
+        )
+
+    def test_admin_memories_rejects_invalid_limit_with_structured_400(self) -> None:
+        handler = self._make_handler(path="/admin/memories?limit=oops")
+        captured: list[tuple[int, object]] = []
+        handler._send = lambda status, payload, headers=None: captured.append((status, payload))  # type: ignore[assignment]
+
+        handler.do_GET()
+
+        self.assertEqual(
+            captured,
+            [(400, {"error_type": "ProviderValidationError", "message": "Query parameter 'limit' must be an integer.", "error": "Query parameter 'limit' must be an integer."})],
+        )
+
     def test_post_search_uses_shared_operation_registry(self) -> None:
         body = json.dumps({"query": "demo"}).encode("utf-8")
         handler = self._make_handler(path="/search", method="POST", body=body)
