@@ -5,10 +5,15 @@ haven't been picked up yet. Strategic direction lives in `ROADMAP.md`; this
 doc is for items small enough to land as a single PR each.
 
 Format per entry:
-- **Status** — `open` / `in-progress` / `blocked`
-- **Severity** — `bug` (wrong behavior) / `hygiene` (right behavior, needs polish)
+- **Priority** — `P0` / `P1` / `P2` / `P3`
+- **Status** — `open` / `in-progress` / `blocked` / `mitigated` / `closed`
+- **Severity** — `bug` (wrong behavior) / `security` / `data-retention` / `hygiene` (right behavior, needs polish)
 - **Why** — what the fix buys us
 - **Where** — pointer to code / test location
+
+Current priority index:
+
+- no open repo-side backlog items remain from the current remediation set
 
 ---
 
@@ -75,9 +80,9 @@ Format per entry:
 
 ---
 
-## 3. Compose v2 network drift: root cause un-addressed
+## 3. Compose v2 network drift: local guard existed but upstream tracking was missing
 
-- **Status:** mitigated
+- **Status:** closed
 - **Severity:** hygiene
 - **Why:** `docker compose up -d --build --force-recreate` has been observed
   dropping `agentmemory` off the external `netbird_netbird` network even when
@@ -93,13 +98,17 @@ Format per entry:
 - **Where:** `deploy/docker-compose.yml` declares the external network
   correctly. The behavior is upstream in `docker compose` v2.
 
-- **Fix outline:**
-  1. File an upstream issue with a minimal reproducer (two networks, one
-     external with an explicit `name:`, `up -d --force-recreate` dropping
-     the external on the second invocation).
-  2. Add a comment in `deploy/docker-compose.yml` pointing at the issue URL
-     and at `deploy/redeploy.sh` so nobody removes the guard.
-  3. If upstream fix lands, deprecate the self-heal in `redeploy.sh`.
+- **Fix:** The repository now carries the missing operational bundle around the
+  existing self-heal:
+  1. `docs/COMPOSE_V2_NETWORK_DRIFT.md` contains a minimal reproducer, issue
+     draft, and repo policy for the defect.
+  2. `deploy/repro-compose-network-drift.sh` provides a self-cleaning local
+     reproducer for hosts that need verification before deploy changes.
+  3. `deploy/docker-compose.yml`, `deploy/redeploy.sh`, and `docs/DEPLOY.md`
+     now point directly at the drift context so the guard is not removed as
+     "dead workaround".
+  The Docker/Compose root cause remains upstream, but the repo-side follow-up is
+  now complete and explicit instead of tribal knowledge.
 
 ---
 
@@ -143,8 +152,8 @@ Format per entry:
   keeps the safe single-page fallback until a backend-safe cursor strategy is
   available. Export uses `list_memories_page` for paginated providers, removing
   the record fixed-limit guard for those providers while keeping the guard for
-  legacy non-paginated providers. Scope inventory still has its own guard until
-  `list_scopes` pagination is added.
+  legacy non-paginated providers. Scope inventory now has `list_scopes_page`,
+  and export walks scope pages.
 
 ---
 
@@ -600,6 +609,310 @@ Format per entry:
   observe provider/runtime-policy changes after on-disk config updates without
   requiring manual `clear_caches()`. Regression tests cover both runtime policy
   and capability updates after an external config-file rewrite.
+
+---
+
+## 25. Page APIs bypass TTL filtering
+
+- **Priority:** P1
+- **Status:** closed
+- **Severity:** data-retention bug
+- **Why:** Runtime `memory_search` and `memory_list` filter expired records and
+  refill the limit when TTL removes records from the first provider batch. The
+  newer cursor page operations return provider pages directly. As a result,
+  expired records can be returned through `memory_search_page`,
+  `memory_list_page`, HTTP `/search/page`, HTTP `/memories/page`, MCP page
+  tools, and export paths that call page readers. That violates the documented
+  read-path TTL contract and can expose records that should be logically
+  expired.
+
+- **Where:** `agentmemory/runtime/operations.py::_execute_search_page` and
+  `_execute_list_page`.
+
+- **Fix outline:** Add page-aware TTL filtering while preserving cursor
+  semantics. The page response should never include expired records. If a page
+  loses items to TTL filtering, either fetch forward until the requested page
+  is filled or return fewer items with the next provider cursor clearly
+  preserved. Add regression tests for list/search page operations and HTTP/MCP
+  paths.
+
+- **Fix:** `memory_search_page` and `memory_list_page` now filter expired
+  records before returning page payloads while preserving the provider
+  `next_cursor`. Provider-neutral export also filters expired records when it
+  consumes page readers directly. Regression coverage lives in
+  `tests/test_observability_lifecycle.py` and
+  `tests/test_agentmemory_portability.py`.
+
+---
+
+## 26. TTL sweeper can permanently miss expired records
+
+- **Priority:** P1
+- **Status:** closed
+- **Severity:** data-retention bug
+- **Why:** The background sweeper calls `list_scopes(limit=500)` and then
+  `list_memories(..., limit=500)` for each scope. If there are more than 500
+  scopes, later scopes are never swept. If a scope has more than 500 records,
+  expired records outside the first provider window may never be hard-deleted.
+  TTL read filtering hides the symptom from normal reads, but the provider
+  store can retain expired data indefinitely.
+
+- **Where:** `agentmemory/runtime/lifecycle.py::_collect_expired_ids`.
+
+- **Fix outline:** Avoid provider fixed-window walks for hard-delete discovery.
+  Scope pagination exists, but `mem0` record pagination is intentionally
+  conservative, so the robust path is to use AgentMemory's registry as a TTL
+  index and rebuild it from the primary store when diagnostics report drift.
+
+- **Fix:** Scope registry rows now include the normalized
+  `metadata.expires_at` value, and the TTL sweeper uses a registry-backed
+  expired-id index instead of walking `list_scopes(limit=500)` plus
+  `list_memories(limit=500)`. The old scope/memory walk remains only as a
+  compatibility fallback for callers that do not inject the registry expired-id
+  helper. This removes the permanent-miss failure mode for registry-backed
+  providers while preserving the existing delete semantics.
+
+---
+
+## 27. Scope registry inventory scans all rows before applying `limit`
+
+- **Priority:** P2
+- **Status:** closed
+- **Severity:** hygiene (scalability)
+- **Why:** `scope_registry.list_inventory` fetches every registry row for the
+  provider, aggregates buckets in Python, sorts all buckets, and only then
+  applies `items[:limit]`. Small calls such as `memory_list_scopes(limit=20)`
+  still pay full-table cost. This affects admin/doctor/export/sweeper paths
+  and will become more visible as providers and memory counts grow.
+
+- **Where:** `agentmemory/runtime/scope_registry.py::list_inventory`.
+
+- **Fix outline:** Add registry-side inventory pagination and/or SQL
+  aggregation by scope kind/value. Preserve current ordering
+  `(kind, -count, value)` and totals while avoiding full-table work on the hot
+  path.
+
+- **Fix:** Scope inventory grouping, filtering, ordering, and page limiting now
+  run inside SQLite through provider-scoped aggregation queries instead of
+  materializing all registry rows into Python first. The runtime preserves the
+  existing `(kind, -count, value)` ordering and totals shape, while inventory
+  pages only fetch the requested window plus one lookahead row. Provider-scoped
+  indexes now cover the hot scope and expiry columns.
+
+---
+
+## 28. Admin memory views bypass runtime TTL filtering
+
+- **Priority:** P2
+- **Status:** closed
+- **Severity:** bug (observability correctness)
+- **Why:** `list_admin_memories` calls `runtime.config.memory_list` and
+  `memory_search` directly instead of going through the operation layer that
+  applies TTL filtering/refill. Admin stats and browser/admin memory views can
+  therefore count or display expired records until the sweeper deletes them.
+  If admin is meant to inspect raw provider state, the behavior should be
+  documented explicitly; otherwise it should match normal read semantics.
+
+- **Where:** `agentmemory/runtime/admin.py::list_admin_memories`.
+
+- **Fix outline:** Route admin list/search through shared operations or apply
+  the same lifecycle filtering locally. Add tests proving expired memories are
+  hidden from admin list/stats unless an explicit raw-provider inspection mode
+  is added.
+
+- **Fix:** Admin list/search results and admin stats now apply the same
+  lifecycle TTL hiding before overlays/counts are computed. `get_admin_memory`
+  also treats expired records as absent. Regression tests cover list, stats,
+  and direct admin-get behavior.
+
+---
+
+## 29. `list_scopes` has no cursor pagination
+
+- **Priority:** P1
+- **Status:** closed
+- **Severity:** hygiene (portability/scalability)
+- **Why:** Provider-neutral export now uses `list_memories_page` for paginated
+  record walks, but the first step is still `list_scopes(limit=10_000)`.
+  If the scope inventory reaches that guard, export fails closed. This is
+  correct because silent truncation would be worse, but it leaves a hard
+  ceiling in the portability story and blocks robust sweeper pagination.
+
+- **Where:** `agentmemory/runtime/portability.py::EXPORT_SCOPE_LIMIT`,
+  `agentmemory/runtime/config.py::memory_list_scopes`,
+  `agentmemory/runtime/scope_registry.py::list_inventory`.
+
+- **Fix outline:** Add `list_scopes_page` with an opaque cursor and a shared
+  `ScopeInventoryPage` shape. Update export to walk pages. Keep the existing
+  `list_scopes` response as the backwards-compatible first-page API.
+
+- **Fix:** Added provider-neutral `list_scopes_page` with opaque cursors across
+  provider base contract, `localjson`, `mem0`, runtime config, HTTP proxy,
+  operation registry, MCP tool generation, HTTP `/admin/scopes/page`, and CLI
+  `list-scopes-page`. Provider-neutral export now walks scope pages instead of
+  relying on the fixed `EXPORT_SCOPE_LIMIT` guard. The legacy `list_scopes`
+  response shape remains unchanged.
+
+---
+
+## 30. Invalid numeric HTTP query params return 500
+
+- **Priority:** P3
+- **Status:** closed
+- **Severity:** bug (API validation)
+- **Why:** Some HTTP GET handlers parse `limit` with raw `int(...)`. A
+  non-numeric query value raises `ValueError` and falls into the generic
+  exception handler, returning `500` instead of a structured `400`
+  validation error.
+
+- **Where:** `agentmemory/api.py` — `/admin/stats`, `/admin/memories`, and
+  other direct `int(params.get(...))` query parsing sites.
+
+- **Fix outline:** Move numeric query parsing into a small shared helper that
+  raises `ProviderValidationError` with a clear field name and minimum-value
+  check. Cover affected endpoints with bad-query tests.
+
+- **Fix:** `agentmemory/api.py` now parses numeric query params through a shared
+  helper that raises typed `ProviderValidationError` with field-specific
+  messages. `/admin/stats` and `/admin/memories` now return structured `400`
+  validation payloads for invalid `limit` values instead of falling through to
+  generic `500`, and regression tests cover both endpoints.
+
+---
+
+## 31. Provider contract does not correctly allow unsupported update/delete
+
+- **Priority:** P2
+- **Status:** closed
+- **Severity:** bug (provider compatibility)
+- **Why:** `ProviderCapabilities` includes `supports_update` and
+  `supports_delete`, but the provider contract harness still treats
+  update/delete as always-required behavior. Future read-only, append-only,
+  archive, graph, or file-backed providers may legitimately be unable to
+  update or delete individual records. Today those providers would be forced
+  either to fake support or fail certification even when they declare the
+  capability accurately.
+
+- **Where:** `agentmemory/providers/base.py`,
+  `tests/provider_contract_harness.py`, and runtime update/delete validation
+  paths.
+
+- **Fix outline:** Make update/delete capability-gated across the provider
+  harness and runtime validation. If a provider declares support, the existing
+  normalized `MemoryRecord` / `DeleteResult` contract still applies. If it
+  declares no support, calls must fail consistently with
+  `ProviderCapabilityError`, and certification should treat that as valid.
+
+- **Fix:** `BaseMemoryProvider` now provides default `ProviderCapabilityError`
+  implementations for unsupported update/delete. Runtime operations validate
+  `supports_update` / `supports_delete` before dispatch, and the reusable
+  provider harness treats unsupported update/delete as a valid declared
+  capability state while still requiring full normalized behavior from
+  providers that advertise support.
+
+---
+
+## 32. Provider registry, certification, and onboarding are split across hardcoded lists
+
+- **Priority:** P2
+- **Status:** closed
+- **Severity:** hygiene (provider compatibility)
+- **Why:** Runtime provider loading, certification targets, certification
+  policy, and first-run onboarding are wired through separate hardcoded lists.
+  A new provider can easily be added to one path but missed in another, causing
+  semi-integrated providers that work in tests but not in CLI setup, or work at
+  runtime but are invisible to certification.
+
+- **Where:** `agentmemory/runtime/config.py::provider_registry`,
+  `agentmemory/certification/registry.py`,
+  `agentmemory/certification/policy.py`, and `agentmemory/interactive.py`.
+
+- **Fix outline:** Introduce a single provider metadata source or descriptor
+  model used by runtime registry, certification registry, policy, and
+  onboarding. Keep provider-specific setup hooks inside provider modules so
+  shared setup code does not need `if provider == "mem0"` branches.
+
+- **Fix:** Provider metadata now lives on provider classes and is surfaced
+  through `agentmemory.providers.registry.ProviderDescriptor`. Runtime provider
+  lookup, certification targets, certification policy, and interactive
+  onboarding all read that descriptor source. Provider-specific onboarding
+  prompts are delegated to provider hooks instead of shared-layer provider-name
+  branching.
+
+---
+
+## 33. Provider certification docs lag behind the current contract
+
+- **Priority:** P2
+- **Status:** closed
+- **Severity:** hygiene (documentation correctness)
+- **Why:** The certification checklist still describes the older provider
+  contract and does not fully document newer obligations: cursor page methods,
+  `supports_pagination`, scope registry maintenance, rebuild support, degraded
+  registry diagnostics, and capability-gated unsupported operations. This makes
+  future provider integration harder and increases the chance of a provider
+  passing an outdated checklist.
+
+- **Where:** `docs/PROVIDER_CERTIFICATION.md`,
+  `docs/PROVIDER_ADAPTER_RULES.md`, and
+  `docs/future-memory-providers/README.md`.
+
+- **Fix outline:** Update certification docs to the current contract. Include
+  required page shapes, scope-registry rules for providers that advertise
+  `supports_scope_inventory`, rebuild expectations, degraded marker behavior,
+  and explicit rules for unsupported update/delete.
+
+- **Fix:** `docs/PROVIDER_CERTIFICATION.md`,
+  `docs/PROVIDER_ADAPTER_RULES.md`, and
+  `docs/future-memory-providers/README.md` now document pagination,
+  scope-registry maintenance, degraded registry semantics, and valid
+  unsupported update/delete capability behavior.
+
+---
+
+## 34. Stale public docs still describe legacy mem0 Qdrant inventory internals
+
+- **Priority:** P3
+- **Status:** closed
+- **Severity:** hygiene (documentation correctness)
+- **Why:** Public positioning docs still say AgentMemory enumerates scopes by
+  inspecting backend storage directly, including Qdrant SQLite internals for
+  `mem0`. That is no longer the normal runtime architecture. Normal
+  `list_scopes` uses AgentMemory's SQLite scope registry; the legacy Qdrant
+  reader is only an explicit one-shot rebuild path.
+
+- **Where:** `docs/WHAT_AGENTMEMORY_ACTUALLY_ADDS.md` scope inventory section.
+
+- **Fix outline:** Update the wording to describe the scope registry as the
+  normal inventory source and mention legacy backend inspection only as an
+  explicit migration/rebuild mechanism when applicable.
+
+- **Fix:** `docs/WHAT_AGENTMEMORY_ACTUALLY_ADDS.md` now describes the
+  AgentMemory-owned scope registry as the normal inventory path and limits
+  backend inspection to explicit legacy rebuild/migration.
+
+---
+
+## 35. Interactive provider setup is mem0/localjson-only
+
+- **Priority:** P3
+- **Status:** closed
+- **Severity:** hygiene (provider compatibility)
+- **Why:** Interactive setup prompts only advertise `mem0` and `localjson`, and
+  unknown input falls back to `mem0`. Future providers would be invisible in
+  first-run setup, and a typo can silently select a semantic provider requiring
+  unrelated credentials.
+
+- **Where:** `agentmemory/interactive.py`.
+
+- **Fix outline:** Generate the provider list from the shared provider
+  registry, reject unknown provider names clearly, and delegate
+  provider-specific prompt questions to provider metadata/hooks.
+
+- **Fix:** Interactive onboarding now reads providers from
+  `agentmemory.providers.registry`, rejects unknown provider names without
+  falling back to `mem0`, and delegates provider-specific prompt behavior to
+  `BaseMemoryProvider.onboarding_configuration()` implementations.
 
 ---
 

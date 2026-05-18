@@ -18,6 +18,10 @@ This matters when memory is no longer used by just one Python process. If you wa
 
 If one Python app owns memory cleanly, direct `mem0` integration is often enough. But if memory needs to be shared across tools and agents, AgentMemory becomes the useful layer on top.
 
+TTL and expiry should be described carefully: AgentMemory supports them as
+optional caller-controlled lifecycle metadata. It does not decide which
+memories are temporary or permanent.
+
 ## When To Use Mem0 Directly
 
 Use `mem0` directly when one Python application owns memory and can configure the backend cleanly inside its own process. That is simpler, and for many projects it is the right answer.
@@ -25,6 +29,18 @@ Use `mem0` directly when one Python application owns memory and can configure th
 ## When AgentMemory Adds Value
 
 AgentMemory adds value when memory must behave like shared local infrastructure for multiple tools, MCP clients, scripts, and agent workflows, while hiding backend-specific runtime quirks behind one stable contract.
+
+## What AgentMemory Is Not
+
+AgentMemory is not:
+
+- a replacement for a memory engine
+- a semantic layer that decides what should be remembered
+- a generalized retention-policy engine
+- a system that automatically classifies short-term vs long-term memory
+
+It is a runtime that executes declared provider and lifecycle semantics
+consistently.
 
 ## FAQ
 
@@ -43,3 +59,9 @@ The current product is local-first and should be described that way publicly. Do
 ### Who is this for right now?
 
 Primarily AI tool builders and local agent-stack developers who want memory available through MCP, CLI, scripts, and HTTP without forcing each tool to embed provider-specific logic.
+
+### Does AgentMemory decide what should use TTL?
+
+No. TTL is optional and caller-controlled. AgentMemory supports `expires_at`
+and `ttl_seconds` when the user or application deliberately sets them, but it
+does not classify memories automatically.

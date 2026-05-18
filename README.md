@@ -222,7 +222,7 @@ More detail:
 
 AgentMemory is usable as a local shared-memory runtime, but it is still a
 public alpha. The current risk/bug index lives in
-[Backlog — Known Bugs & Hygiene Items](docs/BACKLOG.md).
+[Backlog — Known Bugs & Hygiene Items](docs/planning/BACKLOG.md).
 
 Important current limitations:
 
@@ -338,9 +338,9 @@ Use `localjson` when you want:
 - [Use Cases](docs/USE_CASES.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Runtime Boundaries](docs/RUNTIME_BOUNDARIES.md)
-- [Backlog / Current Limitations](docs/BACKLOG.md)
+- [Backlog / Current Limitations](docs/planning/BACKLOG.md)
 - [Positioning Assets](docs/POSITIONING.md)
-- [Roadmap](ROADMAP.md)
+- [Roadmap](docs/planning/ROADMAP.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
 - [Support](SUPPORT.md)

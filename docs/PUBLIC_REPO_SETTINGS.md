@@ -21,7 +21,9 @@ Shared local memory runtime for AI clients and agents. Exposes CLI, HTTP API, an
 
 ## Suggested Website / Docs Entry
 
-Use the repository README or `docs/START_HERE.md` as the initial public docs landing point.
+Use the repository README or `docs/START_HERE.md` as the initial public docs
+landing point. For the mem0-comparison/value story, link
+`docs/MEM0_WITH_AGENTMEMORY_VALUE.md`.
 
 ## Suggested Social Preview Direction
 
@@ -34,5 +36,6 @@ Use a simple visual with:
   - `HTTP API`
   - `MCP`
   - `mem0`
+  - `Runtime Layer`
 
 Avoid generic AI artwork. Make the preview look like a developer infrastructure project.

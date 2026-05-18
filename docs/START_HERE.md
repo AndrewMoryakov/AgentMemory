@@ -94,9 +94,9 @@ If `mem0` fails, go back to `localjson` and confirm the runtime path still works
 Useful project-level references:
 
 - [README](../README.md)
-- [Backlog / Current Limitations](BACKLOG.md)
+- [Backlog / Current Limitations](planning/BACKLOG.md)
 - [Contributing](../CONTRIBUTING.md)
-- [Roadmap](../ROADMAP.md)
+- [Roadmap](planning/ROADMAP.md)
 - [Visual Identity](VISUAL_IDENTITY.md)
 - [Positioning Assets](POSITIONING.md)
 - [Public Repo Settings Checklist](PUBLIC_REPO_SETTINGS.md)

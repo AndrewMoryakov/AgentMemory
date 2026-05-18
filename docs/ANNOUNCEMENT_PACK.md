@@ -17,6 +17,12 @@ It sits above a memory backend and exposes one consistent surface through CLI, H
 
 If you already have one Python app directly using a memory engine, that may be enough. But when memory needs to be shared across scripts, local tools, MCP clients, browser tooling, and agent workflows, `AgentMemory` becomes the useful layer on top.
 
+Important framing:
+
+- `mem0` remains the memory engine
+- `AgentMemory` is the runtime and operational layer around that engine
+- optional lifecycle support such as TTL is caller-controlled metadata, not automatic memory classification
+
 ## Why Not Just Mem0
 
 That is a fair question, and in many cases the honest answer is: you probably should just use `mem0` directly.
@@ -25,11 +31,20 @@ That is a fair question, and in many cases the honest answer is: you probably sh
 
 `AgentMemory` solves a different problem: turning that backend into shared local infrastructure that multiple tools can access consistently. It adds the runtime layer around memory: CLI, HTTP API, MCP, diagnostics, provider contract normalization, and provider-aware runtime behavior.
 
+In some scenarios, that runtime layer also gives practical advantages over
+plain `mem0` integration:
+
+- one owner-process model for fragile local backend constraints
+- runtime-owned inventory and scope discovery
+- shared diagnostics and admin tooling
+- operational paths that are optimized inside AgentMemory's own layer
+
 ## What Is Already Here
 
 - shared local runtime exposed through CLI, HTTP API, and MCP
 - provider-based architecture with `mem0` as the main semantic path and `localjson` as a built-in testing/demo provider
 - diagnostics and operator-friendly surfaces including `doctor`, `mcp-smoke`, typed errors, scope discovery, and browser-based inspection
+- runtime-owned scope registry, export/import, and provider-neutral inventory flows
 
 ## Demo Commands
 
@@ -85,6 +100,10 @@ Short version:
 `AgentMemory` is a shared local memory runtime for AI clients and agents. It exposes one stable surface through CLI, HTTP API, and MCP, and sits above pluggable backend providers such as `mem0`.
 
 This project is not trying to replace memory engines. The idea is simpler: many tools can use one shared runtime without each one integrating backend-specific logic separately. If you only need one Python application talking directly to `mem0`, that may already be enough. But if memory needs to be reused across scripts, local tools, MCP clients, and agent workflows, `AgentMemory` becomes the useful layer on top.
+
+It can also be the more operationally useful choice over plain `mem0` when you
+need runtime-owned features such as scope inventory, admin tooling, shared
+diagnostics, owner-process routing, and provider-neutral portability.
 
 Included in this public alpha:
 
@@ -148,12 +167,17 @@ Already includes:
 - `mem0` + `localjson`
 - `doctor`, `mcp-smoke`, scope discovery
 - browser UI and provider-aware runtime behavior
+- runtime-owned inventory/indexing features above the backend
 
 ## Reddit / HN Intro Version
 
 I have been building `AgentMemory`, a local shared memory runtime for AI clients and agents.
 
 The point is not to replace something like `mem0`. The point is to make a memory backend usable as shared local infrastructure across multiple surfaces: CLI, HTTP API, MCP, local scripts, and browser tooling. If one Python app directly using `mem0` is enough, that is still the simpler path. But once memory has to be reused across multiple tools, the runtime layer starts to matter.
+
+That runtime layer can also give practical wins over plain `mem0` for
+operational tasks such as scope discovery, diagnostics, admin flows, and other
+runtime-owned infrastructure features.
 
 Current state:
 

@@ -1,145 +1,110 @@
 # Prelaunch Risks
 
-This document records the main technical risks that should be understood before positioning AgentMemory as a mature community project or describing it in public media as a production-ready universal memory runtime.
+This document records the current public-alpha risks for AgentMemory.
 
-## Why This Exists
+Historical note: earlier versions of this file listed several launch blockers
+that are now resolved in code: auth on protected HTTP paths, provider-neutral
+scope inventory, runtime-policy based proxy routing, and safer root Docker
+Compose defaults. The active source of truth for specific bugs and follow-ups is
+[BACKLOG.md](BACKLOG.md).
 
-AgentMemory already has the right high-level shape:
+## Current Risk Summary
 
-- a shared contract
-- multiple transports
-- provider adapters
-- contract tests
+AgentMemory is now a stronger local shared-memory runtime than the original
+prelaunch assessment described, but it is still a public alpha. The remaining
+risks are mostly conservative `mem0` record pagination, degraded-registry
+recovery expectations, and public-claim accuracy.
 
-The risks below are not arguments against the architecture. They are the places where the current implementation still relies on shortcuts, implicit assumptions, or provider-specific behavior that can break the public narrative if left undocumented.
-
-## Risk 1: `mem0` scope inventory is implemented through backend internals
-
-### What is happening
-
-`list_scopes` for `mem0` is currently implemented by reading qdrant-backed local storage directly:
-
-- open `storage.sqlite`
-- fetch raw `points`
-- unpickle blobs
-- extract `payload.user_id`, `payload.agent_id`, `payload.run_id`
-
-This is not a supported upstream API contract from `mem0`. It is an implementation-level workaround.
-
-### Why this is a problem
-
-- It couples AgentMemory to private storage details of `mem0` and `qdrant_client`.
-- A dependency update can silently break `list_scopes` without changing the AgentMemory contract.
-- The provider is no longer acting purely as an adapter over supported backend behavior.
-- `pickle` is not a safe format for untrusted input and should be treated carefully.
-
-### What this can lead to
-
-- scope discovery suddenly breaking after dependency upgrades
-- hard-to-debug regressions that only appear on specific local data layouts
-- confusion in the community when a documented feature works only for one exact provider/version combination
-- security concerns if users assume the system safely parses arbitrary persisted data
-
-### Why it matters for public messaging
-
-If AgentMemory is described as a universal provider layer, this feature makes the `mem0` integration look more stable and provider-native than it really is.
-
-## Risk 2: HTTP API has no authentication, while exposing admin and write operations
+## Risk 1: Registry-backed TTL sweeps depend on registry health
 
 ### What is happening
 
-The local HTTP API exposes:
+The TTL sweeper no longer walks fixed-size scope and record windows. It uses the
+scope registry's `expires_at` index to discover expired memory ids. If registry
+sync is degraded, `doctor` reports that a rebuild is needed.
 
-- memory read endpoints
-- memory write/update/delete endpoints
-- admin endpoints
+### Why this matters
 
-There is currently no authentication layer on these endpoints.
+The primary provider store remains the source of truth. A degraded or stale
+registry can make hard-delete discovery incomplete until
+`agentmemory rebuild-scope-registry` is run.
 
-By default the project is usually used on localhost, which keeps this acceptable for local workflows. But the runtime also supports configurable bind host and port.
+### Tracking
 
-### Why this is a problem
+Tracked through scope-registry diagnostics and rebuild guidance.
 
-- The security model depends on deployment discipline rather than enforced policy.
-- If a user binds the API to `0.0.0.0` or any non-local interface, the service can become remotely reachable with no auth barrier.
-- The most sensitive endpoints are the same ones the project exposes for operational convenience.
-
-### What this can lead to
-
-- remote reading of memory contents
-- remote modification or deletion of memory
-- accidental exposure of internal notes, user data, or operational metadata
-- support incidents caused by users following examples without understanding network implications
-
-### Why it matters for public messaging
-
-If articles or docs present AgentMemory as a server component without clearly stating the localhost-only trust model, people may deploy it in unsafe ways.
-
-## Risk 3: proxy behavior is still partially hard-coded to `mem0`
+## Risk 2: `mem0` pagination is intentionally conservative
 
 ### What is happening
 
-The HTTP proxy behavior currently contains logic equivalent to:
+`localjson` implements real cursor pagination. `mem0` currently advertises
+`supports_pagination = False` and uses the base single-page fallback.
 
-- if active provider is `mem0`
-- and current process is not the owner process
-- use the local API as a proxy path
+### Why this matters
 
-This works for current `mem0` locking/runtime behavior, but it is provider-name specific.
+This is honest and safe, but it means large mem0 walks still need a backend-safe
+cursor strategy before they can match the `localjson` pagination behavior.
 
-### Why this is a problem
+### Tracking
 
-- Shared transport logic still knows concrete backend identity.
-- Future providers with the same owner-process constraint will require more provider-name branching.
-- The runtime policy is not fully expressed as capabilities or execution semantics.
-
-### What this can lead to
-
-- architecture drift away from provider-neutral design
-- accumulating `if provider == ...` branches in shared layers
-- more difficult onboarding of new backends such as `Qdrant-native`, `Chroma`, or `LanceDB`
-
-### Why it matters for public messaging
-
-If AgentMemory is described as a generic provider runtime, the transport layer should act on capabilities and policies, not provider names.
-
-## Risk 4: public narrative can overstate readiness
+## Risk 3: Operational network drift is mitigated, not root-fixed
 
 ### What is happening
 
-The project is already strong as:
+Docker Compose v2 external-network drift has been observed on the deployment
+host. `deploy/redeploy.sh` reattaches the container idempotently, so the symptom
+is mitigated for AgentMemory deployments. The repo now also carries an
+issue-ready reproducer and upstream report draft in
+[COMPOSE_V2_NETWORK_DRIFT.md](COMPOSE_V2_NETWORK_DRIFT.md).
 
-- a local memory runtime
-- a provider adapter architecture
-- a testable contract layer
-- an evolving MCP bridge
+### Why this matters
 
-But some capabilities are still transitional or operationally constrained.
+The root cause is upstream/outside this repo. Similar future services could hit
+the same drift if they do not use the guarded redeploy path.
 
-### Why this is a problem
+### Tracking
 
-- Readers often interpret architecture diagrams as readiness claims.
-- Community users will test edge cases first.
-- Articles tend to flatten nuance unless limitations are stated explicitly.
+Tracked as locally guarded and upstream-documented in
+[BACKLOG.md](BACKLOG.md): Compose v2 network drift.
 
-### What this can lead to
+## Resolved Prelaunch Risks
 
-- trust erosion if “universal” sounds stronger than the actual current guarantees
-- bug reports caused by unsupported deployment assumptions
-- pressure to maintain compatibility with accidental behavior instead of intentional contracts
+The following original prelaunch risks are no longer active blockers:
 
-## Recommended Positioning Until These Risks Are Addressed
+- `mem0` runtime scope inventory no longer reads Qdrant private storage or
+  `pickle` blobs. Normal `list_scopes` reads the AgentMemory-owned SQLite scope
+  registry. The legacy reader remains only for explicit one-shot rebuild.
+- Protected HTTP/MCP/admin paths require bearer/OAuth auth when auth is
+  configured, and the root Docker Compose requires `AGENTMEMORY_API_TOKEN`.
+- Internal owner-process proxy calls propagate bearer auth.
+- Transport routing is driven by provider runtime policy, not shared-layer
+  `if provider == "mem0"` branching.
+- `localjson` uses cross-process file locking and atomic replace for direct
+  local transport.
+- Request body size is capped, and authenticated requests are rate-limited.
+- Normal list/search reads, page list/search reads, and provider-neutral export
+  filter TTL-expired records from user-facing payloads.
+- Scope inventory exposes `list_scopes_page`, and provider-neutral export walks
+  scope pages instead of using a fixed scope guard.
+- Future-provider contract hardening now allows unsupported update/delete when
+  declared honestly, and runtime registry, certification metadata, policy, and
+  onboarding share provider descriptors.
 
-Safe public framing right now:
+## Public Messaging Guidance
 
-- AgentMemory is a universal memory runtime architecture with multiple transports and provider adapters.
+Safe framing now:
+
+- AgentMemory is a public-alpha shared local memory runtime.
+- The local runtime, provider contract, MCP/HTTP/CLI surfaces, scope registry,
+  and provider certification path are real and test-covered.
 - `localjson` is the clean reference provider.
-- `mem0` integration is supported, but some operational behavior remains provider-specific.
-- the HTTP API is intended for local trusted environments unless additional security controls are added.
+- `mem0` is supported but operationally constrained and still conservative on
+  cursor pagination.
+- Known limitations are tracked openly in [BACKLOG.md](BACKLOG.md).
 
-Risky framing right now:
+Avoid framing until the remaining P1 lifecycle/pagination items are closed:
 
-- “production-ready universal memory server”
-- “secure multi-user memory service”
-- “fully provider-agnostic runtime” without caveats
-
+- "production-ready universal memory server"
+- "complete retention/hard-delete guarantee for arbitrarily large stores"
+- "fully paginated provider-neutral export for every provider"
+- "secure multi-user hosted memory service"

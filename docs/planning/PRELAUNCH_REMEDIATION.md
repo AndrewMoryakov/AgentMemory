@@ -1,225 +1,137 @@
 # Prelaunch Remediation
 
-This document describes how to resolve the main prelaunch risks in AgentMemory without losing the core architecture.
+This document maps the original prelaunch remediation plan to the current code
+state and lists the remaining remediation work before stronger production-style
+claims are defensible.
 
-## Goal
+The active issue tracker for concrete tasks is [BACKLOG.md](BACKLOG.md).
 
-Preserve the existing model:
+## Remediation Status
 
-- shared AgentMemory contract
-- provider adapters
-- MCP/CLI/HTTP transports
+| Original problem | Current status | Notes |
+|---|---|---|
+| `mem0` scope inventory relies on backend internals | resolved | Runtime `list_scopes` reads the AgentMemory-owned SQLite scope registry. Qdrant/pickle access remains only as an explicit legacy rebuild seed path. |
+| HTTP API unsafe if exposed outside localhost | mostly resolved | Protected paths support bearer/OAuth auth, root Docker Compose requires `AGENTMEMORY_API_TOKEN`, and the default published bind is loopback. Hosted/multi-user auth is still out of scope. |
+| Proxy logic tied to provider name | resolved | Routing uses provider runtime policy such as `direct` and `owner_process_proxy`. |
+| Public claims can exceed guarantees | partially resolved | README now links current limitations. Scope-registry scalability and degraded-registry recovery expectations still limit production-style claims. |
 
-while removing the parts that are still too provider-specific, operationally unsafe, or too fragile for strong public claims.
+## Remaining Remediation Work
 
-## Problem 1: `mem0` scope inventory relies on backend internals
+## 1. Make the TTL sweeper exhaustive
 
 ### Target state
 
-`list_scopes` should be powered by an AgentMemory-owned scope registry or by a native provider capability, not by reverse-engineering provider storage.
+The hard-delete sweeper should discover every registry-known expired record
+without depending on first-page provider windows.
 
-### Recommended solution
+### Current status
 
-Introduce an internal `scope_registry` owned by AgentMemory.
+Implemented for registry-backed providers. Scope registry rows include
+`metadata.expires_at`, and the sweeper reads expired ids from that index before
+deleting from the primary provider store. The older scope/memory walk remains as
+a compatibility fallback when no registry expired-id helper is injected.
 
-Suggested fields:
+Tracked in [BACKLOG.md](BACKLOG.md) as a closed `P1` item.
+
+## 2. `list_scopes` cursor pagination
+
+### Target state
+
+Scope inventory should support the same provider-neutral page pattern as memory
+records:
 
 - `provider`
-- `kind`
-- `value`
-- `count`
-- `last_seen_at`
+- `items`
+- `next_cursor`
+- `pagination_supported`
+- `totals`
 
-Optional fields:
+The old `list_scopes` shape should remain the backwards-compatible first-page
+API.
 
-- `first_seen_at`
-- `source_record_id`
-- `is_deleted` or tombstone markers if needed later
+### Current status
 
-### How it should work
+Implemented. `list_scopes_page` now exposes the page shape above, preserves
+current ordering/filtering/totals, and provider-neutral export walks scope
+pages. TTL sweeper discovery now uses the registry TTL index instead of scope
+window traversal.
 
-On every memory write path:
+Tracked in [BACKLOG.md](BACKLOG.md) as a closed `P1` item.
 
-- `add`
-- `update`
-- `delete` when relevant
-
-the provider adapter or shared runtime updates the scope registry for any known:
-
-- `user_id`
-- `agent_id`
-- `run_id`
-
-Then `list_scopes` reads from this registry instead of provider internals.
-
-### Why this is better
-
-- provider-independent
-- stable across backend upgrades
-- no parsing of unsupported storage formats
-- no dependency on `pickle`
-- works even for providers that do not support global scope discovery
-
-### Transitional plan
-
-Phase 1:
-
-- keep current `mem0` implementation but mark it `experimental`
-
-Phase 2:
-
-- add AgentMemory-owned scope registry
-- make `list_scopes` read from it first
-
-Phase 3:
-
-- remove or downgrade the qdrant/sqlite fallback path
-
-### Provider policy after remediation
-
-For each provider:
-
-- if provider has native scope inventory, adapter may use it
-- otherwise provider can rely on the shared scope registry
-- if neither is available, `supports_scope_inventory = False`
-
-This keeps the contract honest.
-
-## Problem 2: HTTP API is unsafe if exposed outside localhost
+## 3. Improve scope registry scaling
 
 ### Target state
 
-The security model must be explicit and enforced:
+Small inventory calls should not require loading and aggregating every registry
+row in Python.
 
-- either localhost-only by default and difficult to expose accidentally
-- or authenticated when exposed on the network
+### Recommended implementation
 
-### Recommended short-term solution
+- Move aggregation/filtering into SQL where possible.
+- Add indexes for provider/scope fields if the current schema does not already
+  cover the hot path.
+- Keep totals accurate without making small page reads scan unnecessary data.
 
-Make localhost-only the enforced default.
+Tracked in [BACKLOG.md](BACKLOG.md) as a `P2` item.
 
-Concrete changes:
-
-- default bind host remains `127.0.0.1`
-- refuse non-local bind unless the user passes an explicit unsafe flag
-- print a strong warning when unsafe bind is enabled
-
-Suggested flag:
-
-- `--allow-unsafe-network-bind`
-
-### Recommended long-term solution
-
-Add token-based authentication.
-
-Simple model:
-
-- generate or configure an API token
-- require `Authorization: Bearer <token>` on admin and write endpoints
-- optionally allow read-only unauthenticated localhost paths if desired, but only intentionally
-
-### Why this is better
-
-- prevents accidental remote exposure
-- supports a future hosted/server narrative safely
-- gives docs a clear security model
-
-## Problem 3: proxy logic is still tied to the provider name `mem0`
+## 4. Align admin memory views with TTL policy
 
 ### Target state
 
-Transport behavior should depend on provider capabilities or runtime policy, not provider identity.
+Admin memory list/stats should either match normal lifecycle filtering or be
+explicitly documented as raw-provider inspection.
 
-### Recommended solution
+### Current status
 
-Replace provider-name branching with explicit runtime semantics.
+Implemented. Admin list/search results, admin stats, and direct admin-get now
+hide expired records using the shared lifecycle TTL predicate.
 
-Suggested capability or policy fields:
+Tracked in [BACKLOG.md](BACKLOG.md) as a closed `P2` item.
 
-- `supports_owner_process_mode`
-- `requires_owner_process_proxy`
-- `preferred_transport_mode`
-
-Example policy values:
-
-- `direct`
-- `owner_process_proxy`
-- `remote_only`
-
-### How it should work
-
-The provider declares operational constraints.
-
-The transport layer decides:
-
-- direct local call
-- local API proxy call
-- future remote provider call
-
-based on declared policy.
-
-### Why this is better
-
-- truly provider-neutral transport
-- easier onboarding of future providers
-- avoids shared-layer `if provider == ...` growth
-
-## Problem 4: public claims can exceed actual guarantees
+## 5. Keep public docs aligned with implementation state
 
 ### Target state
 
-Public messaging should match current technical guarantees exactly.
+Public entry points should say three things clearly:
 
-### Recommended solution
+- what is implemented and safe to try
+- what is supported but operationally constrained
+- what is known and still open
 
-Split readiness into explicit categories in docs.
+### Current policy
 
-Suggested categories:
+- [README.md](../README.md) contains a `Current Limitations` section.
+- [START_HERE.md](START_HERE.md) points evaluators to the backlog.
+- This document and [PRELAUNCH_RISKS.md](PRELAUNCH_RISKS.md) should be treated
+  as current status documents, not frozen historical notes.
 
-- `Reference providers`
-- `Supported providers`
-- `Experimental providers`
-- `Operational limitations`
+## Suggested Messaging
 
-### Suggested current classification
-
-- `localjson`: reference provider
-- `mem0`: supported but operationally constrained
-- future `Qdrant-native`: target for a cleaner production-style provider
-
-### Documentation to add or strengthen
-
-- security model
-- provider maturity matrix
-- known limitations
-- deployment modes
-- when MCP/API restart is required after upgrades
-
-## Concrete Prelaunch Checklist
-
-### Blockers before strong public claims
-
-- move scope inventory off provider internals or mark it clearly experimental
-- enforce localhost-only API or add auth
-- remove provider-name-specific proxy policy from shared transport logic
-
-### Should fix before broader community promotion
-
-- add a provider maturity matrix to README
-- document security assumptions explicitly
-- document restart behavior for local API and MCP clients
-
-### Nice to have
-
-- implement `Qdrant-native` as a cleaner provider
-- add token auth for networked API mode
-- add provider certification output to public docs
-
-## Suggested Messaging After Remediation
-
-Once the blockers are handled, a much stronger public claim becomes defensible:
+The project can make stronger claims if messaging stays inside runtime scope:
 
 - AgentMemory provides a stable shared contract across transports and providers.
-- Providers can implement memory storage and retrieval while AgentMemory owns the operational contract.
-- Scope discovery, transport policy, and security are handled intentionally rather than by provider-specific behavior.
+- Providers can implement memory storage and retrieval while AgentMemory owns
+  the operational contract.
+- Scope discovery, transport policy, security defaults, lifecycle filtering,
+  and portability are handled intentionally rather than by provider-specific
+  behavior.
+- TTL should be described as optional caller-controlled lifecycle support, not
+  as automatic short-term/long-term memory management by the runtime.
 
+Keep the public framing at `public alpha` and link to the backlog for current
+limitations.
+
+## 6. Improve scope registry scaling
+
+### Target state
+
+Small scope-inventory calls should not require materializing every provider row
+in Python before `limit` is applied.
+
+### Current status
+
+Implemented. Scope inventory aggregation, sorting, totals, and page limiting now
+run inside SQLite, preserving the existing response shape and ordering while
+avoiding Python full-table grouping on the hot path.
+
+Tracked in [BACKLOG.md](BACKLOG.md) as a closed `P2` item.
