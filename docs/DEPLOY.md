@@ -1,12 +1,12 @@
 # Deploy AgentMemory behind Traefik
 
 This guide deploys AgentMemory as a remote MCP + HTTP service on a server
-that already runs Traefik (for example, the `andrewm.ru` ingress host).
+that already runs Traefik (for example, the `agentmemorytool.duckdns.org` ingress host).
 
 The public URL after setup is:
 
 ```
-https://andrewm.ru/agentmemory/
+https://agentmemorytool.duckdns.org/
 ```
 
 with these paths:
@@ -76,7 +76,7 @@ deploy/redeploy.sh
 
 `deploy/redeploy.sh` wraps `docker compose up -d --build --force-recreate`,
 forcibly re-attaches the container to `netbird_netbird` (idempotent), and
-waits for `https://andrewm.ru/agentmemory/health` to return `200`. Exits
+waits for `https://agentmemorytool.duckdns.org/health` to return `200`. Exits
 non-zero if the backend hasn't come back within ~60 seconds, so CI / cron
 can catch partial deploys.
 
@@ -116,7 +116,7 @@ Traefik watches this directory (`--providers.file.watch=true`), so no
 restart is required. Verify from the host:
 
 ```bash
-curl -s https://andrewm.ru/agentmemory/health
+curl -s https://agentmemorytool.duckdns.org/health
 # -> {"ok": true}
 ```
 
@@ -125,12 +125,12 @@ curl -s https://andrewm.ru/agentmemory/health
 ```bash
 TOKEN="..."  # from step 2
 
-curl -sS https://andrewm.ru/agentmemory/mcp \
+curl -sS https://agentmemorytool.duckdns.org/mcp \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
 
-curl -sS https://andrewm.ru/agentmemory/mcp \
+curl -sS https://agentmemorytool.duckdns.org/mcp \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
@@ -151,17 +151,17 @@ instead of silently truncating data.
 Add a Custom Connector with:
 
 - **Type:** Remote MCP / HTTP
-- **URL:** `https://andrewm.ru/agentmemory/mcp`
+- **URL:** `https://agentmemorytool.duckdns.org/mcp`
 - **Header:** `Authorization: Bearer <token>`
 
 ### ChatGPT (Custom Connectors — MCP over HTTP)
 
 Add a connector with:
 
-- **Server URL:** `https://andrewm.ru/agentmemory/mcp`
+- **Server URL:** `https://agentmemorytool.duckdns.org/mcp`
 - **Authentication:** Custom header `Authorization: Bearer <token>`
 
-ChatGPT requires HTTPS; the Let's Encrypt cert on `andrewm.ru` covers it.
+ChatGPT requires HTTPS; the Let's Encrypt cert on `agentmemorytool.duckdns.org` covers it.
 
 ## Observability
 
@@ -217,7 +217,7 @@ conflicting claim pairs; it never edits, deletes, or supersedes records.
 
 ```
                      ┌───────────────────────────────────────────┐
-                     │            andrewm.ru:443 (TLS)           │
+                     │   agentmemorytool.duckdns.org:443 (TLS)   │
                      └──────────────────┬────────────────────────┘
                                         │
                                 ┌───────▼─────────┐
@@ -329,8 +329,8 @@ docker network connect netbird_netbird agentmemory 2>&1 | grep -v "already exist
 
 # Post-deploy smoke test
 TOKEN="$(grep ^AGENTMEMORY_API_TOKEN= .env | cut -d= -f2)"
-curl -fsS https://andrewm.ru/agentmemory/health >/dev/null && echo "health ok"
-curl -fsS -X POST https://andrewm.ru/agentmemory/mcp \
+curl -fsS https://agentmemorytool.duckdns.org/health >/dev/null && echo "health ok"
+curl -fsS -X POST https://agentmemorytool.duckdns.org/mcp \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
   | python3 -c "import sys,json;d=json.load(sys.stdin);print('tools:',len(d['result']['tools']))"

@@ -28,7 +28,7 @@
               "max_tokens": 1500,
               "top_p": 0.1,
               "openrouter_base_url": "https://openrouter.ai/api/v1",
-              "site_url": "https://andrewm.ru/agentmemory",
+              "site_url": "https://agentmemorytool.duckdns.org",
               "app_name": "AgentMemory"
             }
           },

@@ -1,7 +1,7 @@
 # AgentMemory server deployment.
 #
 # Runs the HTTP API + remote-MCP endpoint behind the existing Traefik
-# ingress on andrewm.ru/agentmemory/. The container joins the
+# ingress on agentmemorytool.duckdns.org. The container joins the
 # netbird_netbird bridge so Traefik can reach it via `http://agentmemory:8765`,
 # mirroring how the other NetBird-local services are routed. Public
 # ingress is terminated by Traefik only; no host port is exposed.

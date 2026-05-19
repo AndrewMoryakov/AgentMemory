@@ -2,34 +2,20 @@
 #
 # Install as: /root/netbird/traefik-conf/agentmemory.yml
 #
-# Routes andrewm.ru/agentmemory/* to the agentmemory container which
+# Routes agentmemorytool.duckdns.org/* to the agentmemory container which
 # joins the netbird_netbird network (see deploy/docker-compose.yml).
-# The stripPrefix middleware removes /agentmemory before forwarding,
-# so the app keeps serving /health, /mcp, etc. on its native paths.
+# The container serves /health, /mcp, /.well-known/oauth-* on the host root,
+# so no stripPrefix is needed.
 
 http:
   routers:
     agentmemory:
-      rule: "Host(`andrewm.ru`) && PathPrefix(`/agentmemory`)"
+      rule: "Host(`agentmemorytool.duckdns.org`)"
       entrypoints: [websecure]
       tls:
         certResolver: letsencrypt
       service: agentmemory
       priority: 80
-      middlewares:
-        - agentmemory-strip
-
-    # OAuth/MCP clients (Claude.ai, ChatGPT) do RFC 8414/9728 discovery
-    # at the host root, not under the /agentmemory prefix. Match those
-    # root well-known paths explicitly and forward without stripping so
-    # the app can handle both path-infixed and host-root variants.
-    agentmemory-wellknown:
-      rule: "Host(`andrewm.ru`) && PathPrefix(`/.well-known/oauth-`)"
-      entrypoints: [websecure]
-      tls:
-        certResolver: letsencrypt
-      service: agentmemory
-      priority: 150
 
   services:
     agentmemory:
@@ -44,9 +30,3 @@ http:
           path: /health
           interval: "15s"
           timeout: "3s"
-
-  middlewares:
-    agentmemory-strip:
-      stripPrefix:
-        prefixes:
-          - "/agentmemory"

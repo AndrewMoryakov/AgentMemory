@@ -12,7 +12,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.yml}"
 ENV_FILE="${ENV_FILE:-.env}"
 TRAEFIK_NETWORK="${TRAEFIK_NETWORK:-netbird_netbird}"
 APP_CONTAINER="${APP_CONTAINER:-agentmemory}"
-PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-https://andrewm.ru/agentmemory/health}"
+PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-https://agentmemorytool.duckdns.org/health}"
 
 cd "${PROJECT_DIR}"
 
