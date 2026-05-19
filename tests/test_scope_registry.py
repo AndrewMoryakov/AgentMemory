@@ -1,6 +1,7 @@
 import multiprocessing
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 from agentmemory.runtime import scope_registry
 
@@ -136,7 +137,11 @@ class ScopeRegistryTests(unittest.TestCase):
             self.runtime_dir,
         )
 
-        expired = scope_registry.list_expired_memory_ids("mem0", self.runtime_dir)
+        expired = scope_registry.list_expired_memory_ids(
+            "mem0",
+            self.runtime_dir,
+            now=datetime(2026, 4, 23, 0, 0, tzinfo=timezone.utc),
+        )
 
         self.assertEqual(expired, ["expired"])
 

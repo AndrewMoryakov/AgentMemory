@@ -13,7 +13,7 @@ flowchart TD
     A["Layer 1: Clients and Tools<br/>Codex, Claude Code, scripts, browser UI, MCP clients"] --> B["Layer 2: Public Surfaces<br/>CLI, HTTP API, MCP server, interactive shell"]
     B --> C["Layer 3: Runtime Core<br/>operation registry, adapters, validation, error shaping, routing, diagnostics"]
     C --> D["Layer 4: Provider Contract<br/>typed records, page shapes, capabilities, runtime policy, typed provider errors"]
-    D --> E["Layer 5: Provider Adapters<br/>mem0, localjson, future providers"]
+    D --> E["Layer 5: Provider Adapters<br/>mem0, localjson, claude_memory, mempalace, future providers"]
     E --> F["Layer 6: Backend Storage and Services<br/>embedded stores, vector DBs, hosted APIs"]
 ```
 
@@ -82,6 +82,8 @@ Current providers:
 
 - `mem0`
 - `localjson`
+- `claude_memory`
+- `mempalace`
 
 Provider responsibilities include:
 

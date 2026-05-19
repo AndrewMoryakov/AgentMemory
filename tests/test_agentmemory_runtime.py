@@ -152,6 +152,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         self.assertIn("localjson", agentmemory_runtime.provider_registry())
         self.assertIn("mem0", agentmemory_runtime.provider_registry())
         self.assertIn("claude_memory", agentmemory_runtime.provider_registry())
+        self.assertIn("mempalace", agentmemory_runtime.provider_registry())
 
     def test_provider_class_exposes_certification_metadata(self) -> None:
         metadata = agentmemory_runtime.provider_class("mem0").provider_metadata()
@@ -207,6 +208,25 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["project_root"], str(project_root.resolve()))
         self.assertTrue(payload["capabilities"]["supports_text_search"])
         self.assertFalse(payload["capabilities"]["supports_scope_inventory"])
+        self.assertEqual(payload["runtime_policy"]["transport_mode"], "direct")
+
+    def test_runtime_can_use_mempalace_provider_without_optional_dependency(self) -> None:
+        config = agentmemory_runtime.default_runtime_config()
+        config["runtime"]["provider"] = "mempalace"
+        config["providers"]["mempalace"] = agentmemory_runtime.provider_class("mempalace").default_provider_config(
+            runtime_dir=self.temp_dir.name
+        )
+        agentmemory_runtime.write_runtime_config(config)
+
+        with mock.patch("agentmemory.providers.mempalace._load_mempalace_api", side_effect=ModuleNotFoundError("mempalace")):
+            agentmemory_runtime.clear_caches()
+            payload = agentmemory_runtime.health()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["provider"], "mempalace")
+        self.assertFalse(payload["package_available"])
+        self.assertTrue(payload["capabilities"]["supports_semantic_search"])
+        self.assertTrue(payload["capabilities"]["supports_scope_inventory"])
         self.assertEqual(payload["runtime_policy"]["transport_mode"], "direct")
 
     def test_runtime_info_uses_updated_api_host_and_port(self) -> None:

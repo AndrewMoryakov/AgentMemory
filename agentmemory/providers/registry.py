@@ -6,6 +6,7 @@ from agentmemory.providers.base import BaseMemoryProvider, ProviderConfiguration
 from agentmemory.providers.claude_memory import ClaudeMemoryProvider
 from agentmemory.providers.localjson import LocalJsonProvider
 from agentmemory.providers.mem0 import Mem0Provider
+from agentmemory.providers.mempalace import MemPalaceProvider
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,7 @@ class ProviderDescriptor:
 
 
 def provider_descriptors() -> dict[str, ProviderDescriptor]:
-    providers = (LocalJsonProvider, Mem0Provider, ClaudeMemoryProvider)
+    providers = (LocalJsonProvider, Mem0Provider, ClaudeMemoryProvider, MemPalaceProvider)
     return {provider.provider_name: ProviderDescriptor(provider_class=provider) for provider in providers}
 
 
