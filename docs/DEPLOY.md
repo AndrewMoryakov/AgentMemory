@@ -11,11 +11,11 @@ https://agentmemorytool.duckdns.org/
 
 with these paths:
 
-- `GET  /agentmemory/health` — liveness probe (open)
-- `POST /agentmemory/mcp` — MCP over HTTP (bearer-token protected)
-- `POST /agentmemory/add|search|search/page|update` — legacy HTTP API (bearer-token protected)
-- `GET  /agentmemory/memories`, `/agentmemory/admin/...` — admin/read APIs (bearer-token protected)
-- `GET  /agentmemory/memories/page` — cursor-page memory list API (bearer-token protected)
+- `GET  /health` — liveness probe (open)
+- `POST /mcp` — MCP over HTTP (bearer-token protected)
+- `POST /add|search|search/page|update` — legacy HTTP API (bearer-token protected)
+- `GET  /memories`, `/admin/...` — admin/read APIs (bearer-token protected)
+- `GET  /memories/page` — cursor-page memory list API (bearer-token protected)
 
 The browser UI is disabled on remote deployments via `AGENTMEMORY_DISABLE_UI=1`.
 
@@ -168,8 +168,8 @@ ChatGPT requires HTTPS; the Let's Encrypt cert on `agentmemorytool.duckdns.org` 
 Two endpoints expose runtime metrics (bearer-gated like everything else):
 
 ```
-GET /agentmemory/metrics                 # Prometheus text format
-GET /agentmemory/admin/stats/operations  # JSON summary
+GET /metrics                 # Prometheus text format
+GET /admin/stats/operations  # JSON summary
 ```
 
 The Prometheus endpoint emits:

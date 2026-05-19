@@ -30,7 +30,7 @@ const proxyOptions = {
 };
 
 export default defineConfig(({ command }) => ({
-  base: command === "build" ? "/agentmemory/" : "/",
+  base: "/",
   plugins: [vue(), tailwindcss()],
   resolve: {
     alias: {
