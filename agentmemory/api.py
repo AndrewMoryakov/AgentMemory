@@ -140,6 +140,35 @@ def _ui_disabled() -> bool:
     return os.environ.get("AGENTMEMORY_DISABLE_UI", "").strip() in {"1", "true", "yes"}
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _redirect_uri_allowed(redirect_uri: str) -> bool:
+    """Validate an OAuth redirect_uri.
+
+    Parses the URI and matches the hostname exactly so that prefix-spoofing
+    tricks (e.g. ``http://127.0.0.1.evil.com``, ``http://localhost@evil.com``)
+    are rejected. https is allowed with any host; http is only allowed for
+    loopback hosts. Any userinfo (``@``) is rejected outright.
+    """
+    if not redirect_uri:
+        return False
+    try:
+        parsed = urlparse(redirect_uri)
+    except ValueError:
+        return False
+    # Reject userinfo tricks like http://127.0.0.1@evil.com
+    if parsed.username is not None or parsed.password is not None or "@" in (parsed.netloc or ""):
+        return False
+    scheme = (parsed.scheme or "").lower()
+    hostname = (parsed.hostname or "").lower()
+    if scheme == "https":
+        return bool(hostname)
+    if scheme == "http":
+        return hostname in _LOOPBACK_HOSTS
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "AgentMemory/1.0"
 
@@ -330,10 +359,15 @@ class Handler(BaseHTTPRequestHandler):
         scope = _p("scope") or None
         resource = _p("resource") or None
 
+        # Throttle the unauthenticated authorize endpoint (keyed by client_id)
+        # so it cannot be flooded to grow the in-memory auth-code store.
+        if not self._require_rate_limit(f"oauth-authorize:{given_client_id or 'anonymous'}"):
+            return
+
         if given_client_id != expected_client_id:
             self._send(400, {"error": "invalid_client"})
             return
-        if not (redirect_uri.startswith("https://") or redirect_uri.startswith("http://127.0.0.1") or redirect_uri.startswith("http://localhost")):
+        if not _redirect_uri_allowed(redirect_uri):
             self._send(400, {"error": "invalid_request", "error_description": "redirect_uri must be https or loopback"})
             return
         if response_type != "code":
@@ -342,7 +376,7 @@ class Handler(BaseHTTPRequestHandler):
         if not code_challenge:
             self._send(400, {"error": "invalid_request", "error_description": "code_challenge required"})
             return
-        if code_challenge_method.upper() not in {"S256", "PLAIN"}:
+        if code_challenge_method.upper() != "S256":
             self._send(400, {"error": "invalid_request", "error_description": "unsupported code_challenge_method"})
             return
 

@@ -203,6 +203,13 @@ class AgentMemoryTransportTests(unittest.TestCase):
         self.assertIs(error_class_for_type("", status_code=503), ProviderUnavailableError)
         self.assertIs(error_class_for_type("", status_code=400), ProviderValidationError)
 
+    def test_error_class_for_type_maps_auth_failures_to_unavailable(self) -> None:
+        self.assertIs(error_class_for_type("", status_code=401), ProviderUnavailableError)
+        self.assertIs(error_class_for_type("", status_code=403), ProviderUnavailableError)
+        self.assertIs(error_class_for_type("AuthRequired", status_code=401), ProviderUnavailableError)
+        # A 401 must NOT fall through to the generic <500 validation default.
+        self.assertIsNot(error_class_for_type("", status_code=401), ProviderValidationError)
+
     def test_capability_summary_renders_human_readable_flags(self) -> None:
         summary = capability_summary(
             {

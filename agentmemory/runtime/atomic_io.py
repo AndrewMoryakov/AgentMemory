@@ -7,6 +7,28 @@ from pathlib import Path
 from typing import Any
 
 
+def _fsync_dir(directory: Path) -> None:
+    """Best-effort fsync of a directory to make a rename durable.
+
+    On POSIX, the directory entry created/updated by os.replace is only
+    guaranteed durable after the containing directory is itself fsynced.
+    Opening a directory for fsync is not supported on Windows and may fail
+    on some filesystems, so any OSError is swallowed cleanly.
+    """
+    if os.name != "posix":
+        return
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """Write text to `path` atomically.
 
@@ -35,6 +57,7 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
             os.fsync(temp_file.fileno())
         os.replace(temp_path, path)
         temp_path = None
+        _fsync_dir(path.parent)
     finally:
         if temp_path is not None:
             Path(temp_path).unlink(missing_ok=True)

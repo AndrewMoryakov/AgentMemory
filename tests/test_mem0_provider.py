@@ -137,6 +137,24 @@ class FakeMem0EmptyAddResultBackend(FakeMem0Backend):
         return {"results": [], "raw_saved_record_id": record["id"]}
 
 
+class FakeMem0NoIdAddResultBackend(FakeMem0Backend):
+    """Persists the write but returns an add() result with no usable id or
+    record, forcing the get_all-based fallback to attribute the just-added
+    write among any pre-existing rows in the same scope."""
+
+    def add(self, messages, *, user_id=None, agent_id=None, run_id=None, metadata=None, infer=True, memory_type=None):
+        super().add(
+            messages,
+            user_id=user_id,
+            agent_id=agent_id,
+            run_id=run_id,
+            metadata=metadata,
+            infer=infer,
+            memory_type=memory_type,
+        )
+        return {"results": []}
+
+
 class FakeMem0MessageResultBackend(FakeMem0Backend):
     def update(self, memory_id, data, *, metadata=None):
         super().update(memory_id, data, metadata=metadata)
@@ -211,6 +229,12 @@ class EmptyAddResultMem0Provider(HarnessMem0Provider):
     def __init__(self, *, runtime_config: dict[str, object], provider_config: dict[str, object]) -> None:
         Mem0Provider.__init__(self, runtime_config=runtime_config, provider_config=provider_config)
         self._fake_memory = FakeMem0EmptyAddResultBackend()
+
+
+class NoIdAddResultMem0Provider(HarnessMem0Provider):
+    def __init__(self, *, runtime_config: dict[str, object], provider_config: dict[str, object]) -> None:
+        Mem0Provider.__init__(self, runtime_config=runtime_config, provider_config=provider_config)
+        self._fake_memory = FakeMem0NoIdAddResultBackend()
 
 
 class MessageResultMem0Provider(HarnessMem0Provider):
@@ -322,6 +346,26 @@ class Mem0ProviderHarnessTests(ProviderContractHarness, unittest.TestCase):
         self.assertEqual(created["memory"], "ssh host is 185.177.219.147")
         self.assertEqual(created["metadata"]["topic"], "ops")
         self.assertEqual(created["provider"], "mem0")
+
+    def test_add_fallback_does_not_return_preexisting_record_without_id(self) -> None:
+        provider = NoIdAddResultMem0Provider(
+            runtime_config={"runtime_dir": self.temp_dir.name},
+            provider_config=Mem0Provider.default_provider_config(runtime_dir=self.temp_dir.name),
+        )
+        existing = provider.add_memory(
+            messages=[{"role": "user", "content": "pre-existing note"}],
+            user_id="default",
+        )
+
+        created = provider.add_memory(
+            messages=[{"role": "user", "content": "brand new note"}],
+            user_id="default",
+        )
+
+        # The fallback must attribute the just-added write by its text, never
+        # borrow the pre-existing row that get_all happens to list first.
+        self.assertEqual(created["memory"], "brand new note")
+        self.assertNotEqual(created["id"], existing["id"])
 
     def test_update_uses_get_fallback_for_message_only_success_response(self) -> None:
         provider = MessageResultMem0Provider(

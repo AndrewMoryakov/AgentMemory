@@ -151,10 +151,17 @@ def backup_file(path: Path, backup_dir: Path) -> None:
     shutil.copy2(path, backup_dir / path.name)
 
 
+class ConfigParseError(Exception):
+    """Raised when an existing client config file cannot be parsed as JSON."""
+
+
 def load_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:
     if not path.exists():
         return json.loads(json.dumps(default))
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ConfigParseError(f"existing config at {path} is not valid JSON: {exc}") from exc
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -565,20 +572,47 @@ def disconnect_cline(backup_dir: Path) -> dict[str, Any]:
     return {"target": "cline", "status": "skipped", "reason": "not detected"}
 
 
+def isolated(target: str, fn: "Any", *args: "Any", **kwargs: "Any") -> dict[str, Any]:
+    """Run a single target operation, converting any failure into an error result.
+
+    Keeps batch operations resilient: one corrupt config, permission error,
+    missing directory, or subprocess failure becomes an error entry for that
+    target instead of aborting the whole batch with a traceback.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except ConfigParseError as exc:
+        return {
+            "target": target,
+            "status": "error",
+            "health": "error",
+            "reason": str(exc),
+            "details": str(exc),
+        }
+    except Exception as exc:  # noqa: BLE001 - isolate any per-target failure
+        return {
+            "target": target,
+            "status": "error",
+            "health": "error",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "details": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def connect_all() -> dict[str, Any]:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_dir = BACKUP_ROOT / timestamp
     results = [
-        connect_codex(),
-        connect_claude_code(),
-        connect_claude_desktop(backup_dir),
-        connect_gemini_cli(),
-        connect_qwen_cli(),
-        connect_cursor(backup_dir),
-        connect_vscode_copilot(backup_dir),
-        connect_roo_code(backup_dir),
-        connect_kilocode(backup_dir),
-        connect_cline(backup_dir),
+        isolated("codex", connect_codex),
+        isolated("claude-code", connect_claude_code),
+        isolated("claude-desktop", connect_claude_desktop, backup_dir),
+        isolated("gemini-cli", connect_gemini_cli),
+        isolated("qwen-cli", connect_qwen_cli),
+        isolated("cursor", connect_cursor, backup_dir),
+        isolated("copilot-vscode", connect_vscode_copilot, backup_dir),
+        isolated("roo-code", connect_roo_code, backup_dir),
+        isolated("kilocode", connect_kilocode, backup_dir),
+        isolated("cline", connect_cline, backup_dir),
     ]
     return {
         "server_name": SERVER_NAME,
@@ -592,16 +626,16 @@ def disconnect_all() -> dict[str, Any]:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_dir = BACKUP_ROOT / timestamp
     results = [
-        disconnect_codex(),
-        disconnect_claude_code(),
-        disconnect_claude_desktop(backup_dir),
-        disconnect_gemini_cli(),
-        disconnect_qwen_cli(),
-        disconnect_cursor(backup_dir),
-        disconnect_vscode_copilot(backup_dir),
-        disconnect_roo_code(backup_dir),
-        disconnect_kilocode(backup_dir),
-        disconnect_cline(backup_dir),
+        isolated("codex", disconnect_codex),
+        isolated("claude-code", disconnect_claude_code),
+        isolated("claude-desktop", disconnect_claude_desktop, backup_dir),
+        isolated("gemini-cli", disconnect_gemini_cli),
+        isolated("qwen-cli", disconnect_qwen_cli),
+        isolated("cursor", disconnect_cursor, backup_dir),
+        isolated("copilot-vscode", disconnect_vscode_copilot, backup_dir),
+        isolated("roo-code", disconnect_roo_code, backup_dir),
+        isolated("kilocode", disconnect_kilocode, backup_dir),
+        isolated("cline", disconnect_cline, backup_dir),
     ]
     return {
         "server_name": SERVER_NAME,
@@ -618,19 +652,19 @@ def status_all() -> dict[str, Any]:
     cline_vscode_mcp = cline_vscode_mcp_path()
     cline_cursor_mcp = cline_cursor_mcp_path()
     results = [
-        cli_status("codex", "& codex.ps1 mcp list"),
-        cli_status("claude-code", "& claude mcp list"),
-        config_status(claude_desktop_config, "mcpServers", "claude-desktop"),
-        cli_status("gemini-cli", "& gemini.ps1 mcp list"),
-        cli_status("qwen-cli", "& qwen.ps1 mcp list"),
-        config_status(CURSOR_MCP, "mcpServers", "cursor"),
-        config_status(vscode_mcp, "servers", "copilot-vscode"),
-        config_status(roo_mcp, "mcpServers", "roo-code"),
-        config_status(kilo_mcp, "mcpServers", "kilocode"),
-        config_status(cline_vscode_mcp, "mcpServers", "cline"),
+        isolated("codex", cli_status, "codex", "& codex.ps1 mcp list"),
+        isolated("claude-code", cli_status, "claude-code", "& claude mcp list"),
+        isolated("claude-desktop", config_status, claude_desktop_config, "mcpServers", "claude-desktop"),
+        isolated("gemini-cli", cli_status, "gemini-cli", "& gemini.ps1 mcp list"),
+        isolated("qwen-cli", cli_status, "qwen-cli", "& qwen.ps1 mcp list"),
+        isolated("cursor", config_status, CURSOR_MCP, "mcpServers", "cursor"),
+        isolated("copilot-vscode", config_status, vscode_mcp, "servers", "copilot-vscode"),
+        isolated("roo-code", config_status, roo_mcp, "mcpServers", "roo-code"),
+        isolated("kilocode", config_status, kilo_mcp, "mcpServers", "kilocode"),
+        isolated("cline", config_status, cline_vscode_mcp, "mcpServers", "cline"),
     ]
     if not cline_vscode_mcp.exists() and cline_cursor_mcp.exists():
-        results[-1] = config_status(cline_cursor_mcp, "mcpServers", "cline")
+        results[-1] = isolated("cline", config_status, cline_cursor_mcp, "mcpServers", "cline")
     return {
         "server_name": SERVER_NAME,
         "results": results,
@@ -645,19 +679,19 @@ def console_status_all() -> dict[str, Any]:
     cline_vscode_mcp = cline_vscode_mcp_path()
     cline_cursor_mcp = cline_cursor_mcp_path()
     results = [
-        text_config_status(CODEX_CONFIG, "codex"),
-        text_config_status(CLAUDE_CODE_CONFIG, "claude-code"),
-        config_status(claude_desktop_config, "mcpServers", "claude-desktop"),
-        text_config_status(GEMINI_SETTINGS, "gemini-cli"),
-        text_config_status(QWEN_SETTINGS, "qwen-cli"),
-        config_status(CURSOR_MCP, "mcpServers", "cursor"),
-        config_status(vscode_mcp, "servers", "copilot-vscode"),
-        config_status(roo_mcp, "mcpServers", "roo-code"),
-        config_status(kilo_mcp, "mcpServers", "kilocode"),
-        config_status(cline_vscode_mcp, "mcpServers", "cline"),
+        isolated("codex", text_config_status, CODEX_CONFIG, "codex"),
+        isolated("claude-code", text_config_status, CLAUDE_CODE_CONFIG, "claude-code"),
+        isolated("claude-desktop", config_status, claude_desktop_config, "mcpServers", "claude-desktop"),
+        isolated("gemini-cli", text_config_status, GEMINI_SETTINGS, "gemini-cli"),
+        isolated("qwen-cli", text_config_status, QWEN_SETTINGS, "qwen-cli"),
+        isolated("cursor", config_status, CURSOR_MCP, "mcpServers", "cursor"),
+        isolated("copilot-vscode", config_status, vscode_mcp, "servers", "copilot-vscode"),
+        isolated("roo-code", config_status, roo_mcp, "mcpServers", "roo-code"),
+        isolated("kilocode", config_status, kilo_mcp, "mcpServers", "kilocode"),
+        isolated("cline", config_status, cline_vscode_mcp, "mcpServers", "cline"),
     ]
     if not cline_vscode_mcp.exists() and cline_cursor_mcp.exists():
-        results[-1] = config_status(cline_cursor_mcp, "mcpServers", "cline")
+        results[-1] = isolated("cline", config_status, cline_cursor_mcp, "mcpServers", "cline")
     return {
         "server_name": SERVER_NAME,
         "results": results,
@@ -672,19 +706,19 @@ def doctor_all() -> dict[str, Any]:
     cline_vscode_mcp = cline_vscode_mcp_path()
     cline_cursor_mcp = cline_cursor_mcp_path()
     results = [
-        cli_doctor("codex", "codex.ps1", "& codex.ps1 mcp list"),
-        cli_doctor("claude-code", "claude", "& claude mcp list"),
-        config_doctor(claude_desktop_config, "mcpServers", "claude-desktop"),
-        cli_doctor("gemini-cli", "gemini.ps1", "& gemini.ps1 mcp list"),
-        cli_doctor("qwen-cli", "qwen.ps1", "& qwen.ps1 mcp list"),
-        config_doctor(CURSOR_MCP, "mcpServers", "cursor"),
-        config_doctor(vscode_mcp, "servers", "copilot-vscode"),
-        config_doctor(roo_mcp, "mcpServers", "roo-code"),
-        config_doctor(kilo_mcp, "mcpServers", "kilocode"),
-        config_doctor(cline_vscode_mcp, "mcpServers", "cline"),
+        isolated("codex", cli_doctor, "codex", "codex.ps1", "& codex.ps1 mcp list"),
+        isolated("claude-code", cli_doctor, "claude-code", "claude", "& claude mcp list"),
+        isolated("claude-desktop", config_doctor, claude_desktop_config, "mcpServers", "claude-desktop"),
+        isolated("gemini-cli", cli_doctor, "gemini-cli", "gemini.ps1", "& gemini.ps1 mcp list"),
+        isolated("qwen-cli", cli_doctor, "qwen-cli", "qwen.ps1", "& qwen.ps1 mcp list"),
+        isolated("cursor", config_doctor, CURSOR_MCP, "mcpServers", "cursor"),
+        isolated("copilot-vscode", config_doctor, vscode_mcp, "servers", "copilot-vscode"),
+        isolated("roo-code", config_doctor, roo_mcp, "mcpServers", "roo-code"),
+        isolated("kilocode", config_doctor, kilo_mcp, "mcpServers", "kilocode"),
+        isolated("cline", config_doctor, cline_vscode_mcp, "mcpServers", "cline"),
     ]
     if not cline_vscode_mcp.exists() and cline_cursor_mcp.exists():
-        results[-1] = config_doctor(cline_cursor_mcp, "mcpServers", "cline")
+        results[-1] = isolated("cline", config_doctor, cline_cursor_mcp, "mcpServers", "cline")
     return {
         "server_name": SERVER_NAME,
         "local_server": local_server_doctor(),

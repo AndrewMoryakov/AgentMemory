@@ -31,6 +31,17 @@ _LATENCY_BUCKETS_SECONDS: tuple[float, ...] = (
 )
 
 
+# Cardinality caps. `error_type` (from exc.__class__.__name__) and `model`
+# (from raw provider responses) are attacker/provider-controlled and would
+# otherwise grow the registry — and the resulting Prometheus series count —
+# without bound. Once a keyspace hits its cap, further *new* distinct values
+# are folded into a catch-all bucket so totals stay accurate while series
+# count stays bounded. Existing keys always keep counting.
+_OTHER_LABEL = "__other__"
+_MAX_ERROR_TYPES_PER_OP = 50
+_MAX_MODELS = 100
+
+
 # OpenRouter pricing (USD per 1M tokens) for the shipped defaults. Numbers
 # are approximate — update when pricing changes. A model absent from this
 # table contributes 0 to cost totals but still counts tokens.
@@ -111,7 +122,15 @@ class _MetricsRegistry:
             if status == "ok":
                 self._op_ok[name] = self._op_ok.get(name, 0) + 1
             else:
-                key = (name, error_type or "Unknown")
+                error_type = error_type or "Unknown"
+                key = (name, error_type)
+                if key not in self._op_err:
+                    # Cap distinct error_types per operation; fold overflow
+                    # into a catch-all so a flood of novel exception classes
+                    # cannot blow up cardinality.
+                    distinct = sum(1 for n, _t in self._op_err if n == name)
+                    if distinct >= _MAX_ERROR_TYPES_PER_OP:
+                        key = (name, _OTHER_LABEL)
                 self._op_err[key] = self._op_err.get(key, 0) + 1
             histogram = self._op_latency.setdefault(name, _Histogram())
             histogram.observe(max(duration_seconds, 0.0))
@@ -125,6 +144,16 @@ class _MetricsRegistry:
             return
         normalized = _normalize_model_key(model)
         with self._lock:
+            if (
+                normalized not in self._model_tokens_prompt
+                and normalized not in self._model_tokens_completion
+            ):
+                # Cap distinct models; fold overflow into a catch-all so a
+                # provider returning unbounded model ids cannot blow up
+                # cardinality. Tokens still accrue, just under __other__.
+                distinct = len(set(self._model_tokens_prompt) | set(self._model_tokens_completion))
+                if distinct >= _MAX_MODELS:
+                    normalized = _OTHER_LABEL
             self._model_tokens_prompt[normalized] = self._model_tokens_prompt.get(normalized, 0) + max(int(prompt_tokens), 0)
             self._model_tokens_completion[normalized] = self._model_tokens_completion.get(normalized, 0) + max(int(completion_tokens), 0)
 
@@ -245,7 +274,7 @@ class _MetricsRegistry:
             cumulative = 0
             for idx, boundary in enumerate(_LATENCY_BUCKETS_SECONDS):
                 cumulative += histogram.buckets[idx]
-                le_label = "+Inf" if boundary == float("inf") else repr(boundary)
+                le_label = "+Inf" if boundary == float("inf") else _format_float(boundary)
                 lines.append(
                     f'agentmemory_operation_latency_seconds_bucket{{operation="{_esc(name)}",le="{le_label}"}} {cumulative}'
                 )
@@ -298,6 +327,15 @@ def _estimate_cost_usd(*, model: str, prompt_tokens: int, completion_tokens: int
 
 def _esc(value: str) -> str:
     return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+
+
+def _format_float(value: float) -> str:
+    """Render a bucket boundary as a plain numeric string (no trailing ".0"
+    for integral values), suitable for a Prometheus `le` label.
+    """
+    if value == int(value):
+        return str(int(value))
+    return repr(value)
 
 
 _REGISTRY = _MetricsRegistry()
