@@ -320,7 +320,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_oauth_metadata(self) -> None:
         base = self._public_base_url()
-        self._send(200, {
+        payload = {
             "issuer": base,
             "authorization_endpoint": f"{base}/oauth/authorize",
             "token_endpoint": f"{base}/oauth/token",
@@ -329,7 +329,12 @@ class Handler(BaseHTTPRequestHandler):
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
             "scopes_supported": ["mcp"],
-        })
+        }
+        if oauth_state.dcr_enabled():
+            payload["registration_endpoint"] = f"{base}/register"
+            # RFC 7591 §3 — anonymous registration (no initial access token).
+            payload["registration_endpoint_auth_methods_supported"] = ["none"]
+        self._send(200, payload)
 
     def _handle_resource_metadata(self) -> None:
         base = self._public_base_url()
@@ -341,11 +346,9 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def _handle_oauth_authorize(self, params: dict[str, list[str]]) -> None:
-        creds = oauth_state.client_credentials()
-        if creds is None:
+        if not oauth_state.oauth_flow_available():
             self._send(501, {"error": "oauth_disabled"})
             return
-        expected_client_id, _ = creds
 
         def _p(name: str, default: str = "") -> str:
             return (params.get(name) or [default])[0]
@@ -364,11 +367,16 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_rate_limit(f"oauth-authorize:{given_client_id or 'anonymous'}"):
             return
 
-        if given_client_id != expected_client_id:
+        client_record = oauth_state.lookup_client(given_client_id)
+        if client_record is None:
             self._send(400, {"error": "invalid_client"})
             return
+        # Two-layer check: scheme/host safety, then per-client allowlist.
         if not _redirect_uri_allowed(redirect_uri):
             self._send(400, {"error": "invalid_request", "error_description": "redirect_uri must be https or loopback"})
+            return
+        if not oauth_state.redirect_uri_allowed(client_record, redirect_uri):
+            self._send(400, {"error": "invalid_request", "error_description": "redirect_uri not allowed for this client"})
             return
         if response_type != "code":
             self._send(400, {"error": "unsupported_response_type"})
@@ -381,7 +389,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         code = oauth_state.issue_auth_code(
-            client_id=expected_client_id,
+            client_id=given_client_id,
             redirect_uri=redirect_uri,
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method,
@@ -404,12 +412,45 @@ class Handler(BaseHTTPRequestHandler):
             if not self._client_disconnected(exc):
                 raise
 
+    def _handle_dynamic_registration(self) -> None:
+        if not oauth_state.dcr_enabled():
+            self._send(404, {"error": "registration_disabled"})
+            return
+
+        # Anonymous endpoint — protect with per-IP rate limit so a runaway
+        # client can't fill the on-disk registry.
+        peer = "unknown"
+        try:
+            peer = self.client_address[0]
+        except Exception:
+            pass
+        if not self._require_rate_limit(f"oauth-register:{peer}"):
+            return
+
+        try:
+            payload = self._read_json()
+        except RequestBodyTooLarge as exc:
+            self._send(413, {"error": "invalid_client_metadata", "error_description": str(exc)})
+            return
+        except json.JSONDecodeError as exc:
+            self._send(400, {"error": "invalid_client_metadata", "error_description": f"Invalid JSON: {exc}"})
+            return
+
+        try:
+            response = oauth_state.register_client(payload)
+        except oauth_state.RegistrationError as exc:
+            body = {"error": exc.error}
+            if exc.description:
+                body["error_description"] = exc.description
+            self._send(400, body)
+            return
+
+        self._send(201, response, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+
     def _handle_oauth_token(self) -> None:
-        creds = oauth_state.client_credentials()
-        if creds is None:
+        if not oauth_state.oauth_flow_available():
             self._send(501, {"error": "oauth_disabled"})
             return
-        expected_client_id, _ = creds
 
         raw = self._read_request_body().decode("utf-8")
         form = parse_qs(raw, keep_blank_values=True)
@@ -436,7 +477,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_rate_limit(f"oauth-client:{client_key}"):
             return
 
-        if given_client_id != expected_client_id or not oauth_state.verify_client_secret(given_client_secret):
+        if not given_client_id or not oauth_state.verify_client_secret(given_client_id, given_client_secret):
             self._send(401, {"error": "invalid_client"})
             return
 
@@ -447,7 +488,7 @@ class Handler(BaseHTTPRequestHandler):
 
         entry = oauth_state.consume_auth_code(
             code=_f("code"),
-            client_id=expected_client_id,
+            client_id=given_client_id,
             redirect_uri=_f("redirect_uri"),
             code_verifier=_f("code_verifier"),
         )
@@ -455,7 +496,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "invalid_grant"})
             return
 
-        token, ttl = oauth_state.issue_access_token(client_id=expected_client_id, scope=entry.get("scope"))
+        token, ttl = oauth_state.issue_access_token(client_id=given_client_id, scope=entry.get("scope"))
         payload = {
             "access_token": token,
             "token_type": "Bearer",
@@ -610,6 +651,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.path == "/oauth/token":
                 self._handle_oauth_token()
+                return
+            if self.path == "/register":
+                self._handle_dynamic_registration()
                 return
             if not self._require_auth():
                 return
