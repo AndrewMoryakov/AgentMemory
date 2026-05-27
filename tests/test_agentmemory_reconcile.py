@@ -30,6 +30,30 @@ class AgentMemoryReconcileTests(unittest.TestCase):
         self.assertEqual(conflicts[0]["subject"], "user")
         self.assertEqual(conflicts[0]["predicate"], "prefers")
 
+    def test_find_conflicts_does_not_cross_scopes(self) -> None:
+        records = [
+            {"id": "a", "memory": "alice is happy", "metadata": {}, "user_id": "u1"},
+            {"id": "b", "memory": "alice is not happy", "metadata": {}, "user_id": "u2"},
+        ]
+
+        conflicts = reconcile.find_conflicts(records)
+
+        self.assertEqual(conflicts, [])
+
+    def test_find_conflicts_within_single_scope_still_flagged(self) -> None:
+        records = [
+            {"id": "a", "memory": "alice is happy", "metadata": {}, "user_id": "u1"},
+            {"id": "b", "memory": "alice is not happy", "metadata": {}, "user_id": "u1"},
+            {"id": "c", "memory": "alice is not happy", "metadata": {}, "user_id": "u2"},
+        ]
+
+        conflicts = reconcile.find_conflicts(records)
+
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["reason"], "opposite_polarity")
+        self.assertEqual(conflicts[0]["left"]["user_id"], "u1")
+        self.assertEqual(conflicts[0]["right"]["user_id"], "u1")
+
     def test_find_conflicts_can_use_structured_claim_metadata(self) -> None:
         records = [
             {

@@ -117,45 +117,52 @@ def _conflict_reason(left_claim: dict[str, Any], right_claim: dict[str, Any]) ->
     return None
 
 
+def _scope_key(record: MemoryRecord) -> tuple[Any, Any, Any]:
+    return (record.get("user_id"), record.get("agent_id"), record.get("run_id"))
+
+
 def find_conflicts(records: list[MemoryRecord]) -> list[dict[str, Any]]:
-    claimed: list[tuple[MemoryRecord, dict[str, Any]]] = []
-    for record in records:
+    # Partition records by scope identity so claims from different
+    # users/agents/runs are never compared against each other.
+    by_scope: dict[tuple[Any, Any, Any], list[tuple[int, MemoryRecord, dict[str, Any]]]] = {}
+    for index, record in enumerate(records):
         claim = _claim_for_record(record)
         if claim is not None:
-            claimed.append((record, claim))
+            by_scope.setdefault(_scope_key(record), []).append((index, record, claim))
 
     conflicts: list[dict[str, Any]] = []
     seen_pairs: set[tuple[str, str]] = set()
-    for left_index, (left_record, left_claim) in enumerate(claimed):
-        for right_record, right_claim in claimed[left_index + 1 :]:
-            reason = _conflict_reason(left_claim, right_claim)
-            if reason is None:
-                continue
-            left_id = str(left_record.get("id") or left_index)
-            right_id = str(right_record.get("id") or len(seen_pairs))
-            pair_key = tuple(sorted((left_id, right_id)))
-            if pair_key in seen_pairs:
-                continue
-            seen_pairs.add(pair_key)
-            conflicts.append(
-                {
-                    "reason": reason[0],
-                    "confidence": reason[1],
-                    "subject": left_claim["subject"],
-                    "predicate": left_claim["predicate"],
-                    "left_claim": {
-                        "value": left_claim["value"],
-                        "polarity": left_claim["polarity"],
-                        "source": left_claim["source"],
-                    },
-                    "right_claim": {
-                        "value": right_claim["value"],
-                        "polarity": right_claim["polarity"],
-                        "source": right_claim["source"],
-                    },
-                    "left": _record_summary(left_record),
-                    "right": _record_summary(right_record),
-                }
-            )
+    for claimed in by_scope.values():
+        for offset, (left_index, left_record, left_claim) in enumerate(claimed):
+            for right_index, right_record, right_claim in claimed[offset + 1 :]:
+                reason = _conflict_reason(left_claim, right_claim)
+                if reason is None:
+                    continue
+                left_id = str(left_record.get("id") or f"idx:{left_index}")
+                right_id = str(right_record.get("id") or f"idx:{right_index}")
+                pair_key = tuple(sorted((left_id, right_id)))
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                conflicts.append(
+                    {
+                        "reason": reason[0],
+                        "confidence": reason[1],
+                        "subject": left_claim["subject"],
+                        "predicate": left_claim["predicate"],
+                        "left_claim": {
+                            "value": left_claim["value"],
+                            "polarity": left_claim["polarity"],
+                            "source": left_claim["source"],
+                        },
+                        "right_claim": {
+                            "value": right_claim["value"],
+                            "polarity": right_claim["polarity"],
+                            "source": right_claim["source"],
+                        },
+                        "left": _record_summary(left_record),
+                        "right": _record_summary(right_record),
+                    }
+                )
 
     return sorted(conflicts, key=lambda item: (-float(item["confidence"]), str(item["subject"]), str(item["predicate"])))

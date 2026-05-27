@@ -4,6 +4,44 @@ import json
 from typing import Any, Callable
 
 from agentmemory.providers.base import ProviderValidationError
+from agentmemory.runtime.schema_validation import validate_arguments
+
+
+def _input_schema_for(operation_name: str) -> dict[str, Any] | None:
+    # Imported lazily to keep adapters importable even if the operations
+    # registry (which pulls in providers/config) is mid-initialization; there
+    # is no static import cycle today, but a lazy lookup keeps it robust.
+    from agentmemory.runtime.operations import OPERATIONS
+
+    spec = OPERATIONS.get(operation_name)
+    return spec.input_schema if spec is not None else None
+
+
+def _validate_http_payload(operation_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate a client-supplied request body against the op schema.
+
+    Mirrors MCP: the raw payload is validated as-is so explicit nulls for
+    typed optional fields are rejected exactly as MCP rejects them.
+    """
+    schema = _input_schema_for(operation_name)
+    if schema is not None:
+        validate_arguments(schema, payload)
+    return payload
+
+
+def _validate_http_source(operation_name: str, source: dict[str, Any]) -> dict[str, Any]:
+    """Validate an adapter-built source (from query/path params).
+
+    Query/path adapters synthesize optional fields as explicit None to keep a
+    stable source shape; the schema treats those fields as simply absent (they
+    are not in `required`). Validate against the present values only so a None
+    placeholder is not mistaken for a bad type, then return the full source.
+    """
+    schema = _input_schema_for(operation_name)
+    if schema is not None:
+        present = {key: value for key, value in source.items() if value is not None}
+        validate_arguments(schema, present)
+    return source
 
 
 def operation_name_for_mcp_tool(tool_name: str) -> str:
@@ -130,24 +168,30 @@ def http_operation_source(
     if operation_name == "health":
         return {}
     if operation_name == "add":
-        return dict(payload)
+        # Validate the RAW payload (which carries `text`, not `messages`) against
+        # the schema exactly as MCP does, THEN synthesize the `messages` list the
+        # `_execute_add` handler reads. Order matters: validation must see `text`.
+        _validate_http_payload(operation_name, payload)
+        source = dict(payload)
+        source["messages"] = [{"role": "user", "content": payload["text"]}]
+        return source
     if operation_name == "list_scopes":
-        return {
+        return _validate_http_source(operation_name, {
             "limit": int((query_params.get("limit") or ["200"])[0]),
             "kind": (query_params.get("kind") or [None])[0],
             "query": (query_params.get("query") or [None])[0],
-        }
+        })
     if operation_name == "list_scopes_page":
-        return {
+        return _validate_http_source(operation_name, {
             "limit": int((query_params.get("limit") or ["200"])[0]),
             "cursor": (query_params.get("cursor") or [None])[0],
             "kind": (query_params.get("kind") or [None])[0],
             "query": (query_params.get("query") or [None])[0],
-        }
+        })
     if operation_name in {"search", "search_page"}:
-        return dict(payload)
+        return _validate_http_payload(operation_name, dict(payload))
     if operation_name == "update":
-        return dict(payload)
+        return _validate_http_payload(operation_name, dict(payload))
     if operation_name in {"list", "list_page"}:
         filters = None
         filters_param = (query_params.get("filters") or [None])[0]
@@ -156,14 +200,14 @@ def http_operation_source(
                 filters = json.loads(filters_param)
             except json.JSONDecodeError as exc:
                 raise ProviderValidationError(f"Invalid JSON: {exc.msg}") from exc
-        return {
+        return _validate_http_source(operation_name, {
             "user_id": (query_params.get("user_id") or [None])[0],
             "agent_id": (query_params.get("agent_id") or [None])[0],
             "run_id": (query_params.get("run_id") or [None])[0],
             "limit": int((query_params.get("limit") or ["100"])[0]),
             **({"cursor": (query_params.get("cursor") or [None])[0]} if operation_name == "list_page" else {}),
             "filters": filters,
-        }
+        })
     if operation_name in {"get", "delete"}:
         return {"memory_id": path_params["memory_id"]}
     raise ProviderValidationError(f"Unsupported HTTP operation: {operation_name}")

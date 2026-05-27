@@ -264,6 +264,7 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
         original_capabilities = agentmemory_operations.active_provider_capabilities
         original_provider_name = agentmemory_operations.active_provider_name
         original_memory_search = agentmemory_operations.memory_search
+        original_should_proxy = agentmemory_operations.should_proxy_to_api
         captured: dict = {}
 
         def fake_memory_search(**kwargs):
@@ -293,6 +294,12 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
             }
             agentmemory_operations.active_provider_name = lambda: "localjson"  # type: ignore[assignment]
             agentmemory_operations.memory_search = fake_memory_search  # type: ignore[assignment]
+            # The mocked provider is a direct (localjson-like) backend, so the
+            # dispatcher must run in-process and reach fake_memory_search. Pin
+            # the transport to direct; otherwise should_proxy_to_api() reads the
+            # ambient active provider (mem0 by default) and the call leaks into
+            # the owner-process proxy, failing wherever no API is running.
+            agentmemory_operations.should_proxy_to_api = lambda: False  # type: ignore[assignment]
             rc = agentmemory_cli.main()
         finally:
             sys.argv = original_argv
@@ -301,6 +308,7 @@ class AgentMemoryCliValidationTests(unittest.TestCase):
             agentmemory_operations.active_provider_capabilities = original_capabilities  # type: ignore[assignment]
             agentmemory_operations.active_provider_name = original_provider_name  # type: ignore[assignment]
             agentmemory_operations.memory_search = original_memory_search  # type: ignore[assignment]
+            agentmemory_operations.should_proxy_to_api = original_should_proxy  # type: ignore[assignment]
 
         self.assertEqual(rc, 0)
         self.assertNotIn("does not support rerank", stderr_buffer.getvalue())

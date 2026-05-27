@@ -4,6 +4,7 @@ import contextlib
 import base64
 from datetime import datetime, timezone
 import json
+import logging
 import os
 import sqlite3
 from pathlib import Path
@@ -16,6 +17,9 @@ if os.name == "nt":
     import msvcrt
 else:
     import fcntl
+
+
+_logger = logging.getLogger(__name__)
 
 
 _SCHEMA = """
@@ -102,7 +106,13 @@ def _connect(runtime_dir: str) -> Iterator[sqlite3.Connection]:
     path = registry_path(runtime_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10.0)
-    connection.execute("PRAGMA busy_timeout = 10000")
+    # Enable WAL so readers and writers don't block each other across the
+    # multiple processes (CLI + API server + providers) that sync on every op.
+    # journal_mode returns a row, so consume it; WAL is persisted per-DB once set.
+    connection.execute("PRAGMA journal_mode=WAL").fetchone()
+    connection.execute("PRAGMA busy_timeout=5000")
+    # NORMAL is durable and safe under WAL while avoiding fsync-per-commit stalls.
+    connection.execute("PRAGMA synchronous=NORMAL")
     connection.execute(_SCHEMA)
     for statement in _INDEXES:
         connection.execute(statement)
@@ -292,7 +302,25 @@ def mark_sync_failed(
             }
         )
         providers[provider_name] = current
-        _write_status_document(runtime_dir, payload)
+        try:
+            _write_status_document(runtime_dir, payload)
+        except Exception:
+            # The status write can fail under the same condition that broke the
+            # registry write (e.g. disk full). If it is swallowed by callers,
+            # needs_rebuild never gets persisted and the registry drifts with no
+            # signal, so emit a loud, observable record before propagating.
+            _logger.error(
+                "scope_registry: failed to persist needs_rebuild status for "
+                "provider=%s operation=%s memory_id=%s; registry may drift "
+                "undetected (original error: %s: %s)",
+                provider_name,
+                operation,
+                memory_id,
+                error.__class__.__name__,
+                error,
+                exc_info=True,
+            )
+            raise
 
 
 def clear_sync_failure(provider_name: str, runtime_dir: str, *, rebuilt: bool = False) -> None:

@@ -388,6 +388,58 @@ class AgentMemoryHttpClientTests(unittest.TestCase):
         finally:
             agentmemory_http_client.urlopen = original_urlopen  # type: ignore[assignment]
 
+    def test_http_error_401_maps_to_actionable_authentication_error(self) -> None:
+        original_urlopen = agentmemory_http_client.urlopen
+        try:
+            class FakeHttpError(agentmemory_http_client.HTTPError):
+                def __init__(self):
+                    super().__init__(
+                        url="http://127.0.0.1:8765/add",
+                        code=401,
+                        msg="Unauthorized",
+                        hdrs=None,
+                        fp=None,
+                    )
+
+                def read(self):
+                    return b'{"error":"unauthorized"}'
+
+            def fake_urlopen(*args, **kwargs):
+                raise FakeHttpError()
+
+            agentmemory_http_client.urlopen = fake_urlopen  # type: ignore[assignment]
+
+            with self.assertRaises(ProviderUnavailableError) as ctx:
+                agentmemory_http_client._request("POST", "/add", {"messages": "hi"})
+            self.assertIn("AGENTMEMORY_API_TOKEN", str(ctx.exception))
+            self.assertIn("401", str(ctx.exception))
+        finally:
+            agentmemory_http_client.urlopen = original_urlopen  # type: ignore[assignment]
+
+    def test_owner_with_mismatched_pid_proxies_as_inheriting_child(self) -> None:
+        original_runtime_policy = agentmemory_http_client.active_provider_runtime_policy
+        original_read_api_pid = agentmemory_http_client.read_api_pid
+        original_owner = os.environ.get(agentmemory_http_client.OWNER_ENV)
+        try:
+            agentmemory_http_client.active_provider_runtime_policy = lambda: {"transport_mode": "owner_process_proxy"}  # type: ignore[assignment]
+            os.environ[agentmemory_http_client.OWNER_ENV] = "1"
+            # Recorded owner pid does not match this process -> we are an inheriting child.
+            agentmemory_http_client.read_api_pid = lambda: os.getpid() + 1  # type: ignore[assignment]
+            self.assertTrue(agentmemory_http_client.should_proxy_to_api())
+            # Matching pid -> we ARE the owner, do not proxy.
+            agentmemory_http_client.read_api_pid = lambda: os.getpid()  # type: ignore[assignment]
+            self.assertFalse(agentmemory_http_client.should_proxy_to_api())
+            # Startup window (no pid recorded yet) -> trust the flag, do not proxy.
+            agentmemory_http_client.read_api_pid = lambda: None  # type: ignore[assignment]
+            self.assertFalse(agentmemory_http_client.should_proxy_to_api())
+        finally:
+            agentmemory_http_client.active_provider_runtime_policy = original_runtime_policy  # type: ignore[assignment]
+            agentmemory_http_client.read_api_pid = original_read_api_pid  # type: ignore[assignment]
+            if original_owner is None:
+                os.environ.pop(agentmemory_http_client.OWNER_ENV, None)
+            else:
+                os.environ[agentmemory_http_client.OWNER_ENV] = original_owner
+
     def test_http_error_type_maps_capability_error(self) -> None:
         original_urlopen = agentmemory_http_client.urlopen
         try:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-from functools import lru_cache
 import importlib.metadata
 import pickle
 from pathlib import Path
@@ -243,6 +242,12 @@ class Mem0Provider(BaseMemoryProvider):
     def __init__(self, *, runtime_config: dict[str, Any], provider_config: dict[str, Any]) -> None:
         super().__init__(runtime_config=runtime_config, provider_config=provider_config)
         self._memory_lock = Lock()
+        # Per-instance caches. Lifetime is tied to this provider instance, so a
+        # fresh Mem0Provider (built by config.get_provider after clear_caches on
+        # reconfigure / key rotation) always rebuilds Memory and re-reads the
+        # API key. Never promote these to module/global caches.
+        self._memory: Memory | None = None
+        self._api_key: str | None = None
 
     def capabilities(self) -> ProviderCapabilities:
         return {
@@ -286,20 +291,23 @@ class Mem0Provider(BaseMemoryProvider):
         }
 
     def clear_caches(self) -> None:
-        self._get_openrouter_api_key.cache_clear()
-        self._load_memory.cache_clear()
+        self._memory = None
+        self._api_key = None
 
-    @lru_cache(maxsize=1)
     def _get_openrouter_api_key(self) -> str:
+        if self._api_key is not None:
+            return self._api_key
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not is_configured_api_key(api_key):
             raise ProviderConfigurationError(
                 "OPENROUTER_API_KEY is not set. Put it in the shell or in AgentMemory/.env"
             )
+        self._api_key = api_key
         return api_key
 
-    @lru_cache(maxsize=1)
     def _load_memory(self) -> Memory:
+        if self._memory is not None:
+            return self._memory
         api_key = self._get_openrouter_api_key()
         _install_openai_usage_capture()
 
@@ -315,7 +323,8 @@ class Mem0Provider(BaseMemoryProvider):
         embedder_config["api_key"] = api_key
         embedder["config"] = embedder_config
         config["embedder"] = embedder
-        return Memory.from_config(config)
+        self._memory = Memory.from_config(config)
+        return self._memory
 
     def _normalize_record(self, payload: dict[str, Any], *, include_score: bool = False) -> MemoryRecord:
         if not isinstance(payload, dict):
@@ -420,44 +429,101 @@ class Mem0Provider(BaseMemoryProvider):
             )
         )
 
+    @staticmethod
+    def _added_text(messages: Any) -> str:
+        """Best-effort flatten of the add() input into the text mem0 would
+        store, so the fallback can attribute a listed record to this write."""
+        if isinstance(messages, str):
+            return messages.strip()
+        if isinstance(messages, dict):
+            return str(messages.get("content", "")).strip()
+        if isinstance(messages, list):
+            parts = [
+                str(item.get("content", "")) if isinstance(item, dict) else str(item)
+                for item in messages
+            ]
+            return "\n".join(part for part in parts if part).strip()
+        return ""
+
     def _fallback_added_record(
         self,
         *,
         memory: Memory,
+        added_id: str | None = None,
+        added_text: str = "",
         user_id=None,
         agent_id=None,
         run_id=None,
         metadata=None,
         memory_type=None,
     ) -> MemoryRecord:
+        # mem0 didn't hand back a proper record. If it surfaced an id for the
+        # just-saved write, fetch that exact record rather than guessing.
+        if added_id:
+            try:
+                return self._normalize_one_record(memory.get(added_id))
+            except Exception:
+                pass
+
         payload = memory.get_all(user_id=user_id, agent_id=agent_id, run_id=run_id, limit=25, filters=None)
         records = self._normalize_records(payload)
+        matched = records
         if metadata:
-            filtered = [
+            matched = [
                 record
-                for record in records
+                for record in matched
                 if all(record.get("metadata", {}).get(key) == value for key, value in metadata.items())
             ]
-            if filtered:
-                records = filtered
         if memory_type is not None:
-            typed = [
+            matched = [
                 record
-                for record in records
+                for record in matched
                 if record.get("memory_type") == memory_type
                 or record.get("metadata", {}).get("memory_type") == memory_type
             ]
-            if typed:
-                records = typed
-        if not records:
-            raise ProviderValidationError("Mem0 add succeeded without returning a usable record, and fallback lookup found nothing.")
-        return records[0]
+        # Text is the strongest signal that a listed row is the write we just
+        # made; require it (when known) so we never return a pre-existing row.
+        if added_text:
+            text_matched = [
+                record for record in matched if str(record.get("memory", "")).strip() == added_text
+            ]
+            if text_matched:
+                matched = text_matched
+            else:
+                matched = []
+
+        # Only trust a listed record when something discriminating narrowed it
+        # down (text/metadata/memory_type) AND it resolved to a single row;
+        # otherwise the "first row" is an arbitrary pre-existing record.
+        had_discriminator = bool(added_text or metadata or memory_type is not None)
+        if matched and (len(matched) == 1 or had_discriminator):
+            return matched[0]
+
+        # No confident match. If mem0 surfaced a real id for the write (but the
+        # earlier get() failed transiently), build a minimal record from the
+        # known write rather than syncing an arbitrary pre-existing row's id.
+        if added_id:
+            return self._normalize_record(
+                {
+                    "id": added_id,
+                    "memory": added_text,
+                    "metadata": dict(metadata or {}),
+                    "user_id": user_id,
+                    "agent_id": agent_id,
+                    "run_id": run_id,
+                    "memory_type": memory_type,
+                }
+            )
+        # Without a confident match or a real id we must not invent / borrow an
+        # id; surfacing the failure is safer than syncing the wrong record.
+        raise ProviderValidationError("Mem0 add succeeded without returning a usable record, and fallback lookup found nothing.")
 
     def _normalize_add_result(
         self,
         payload: Any,
         *,
         memory: Memory,
+        added_text: str = "",
         user_id=None,
         agent_id=None,
         run_id=None,
@@ -483,8 +549,20 @@ class Mem0Provider(BaseMemoryProvider):
                             except Exception:
                                 return record
                         return record
+            # mem0 sometimes wraps the saved id in a non-record envelope (e.g.
+            # an empty results list alongside raw_saved_record_id). Surface that
+            # id to the fallback so it can fetch / attribute the exact write.
+            added_id = None
+            if isinstance(payload, dict):
+                for key in ("raw_saved_record_id", "memory_id", "id"):
+                    candidate = payload.get(key)
+                    if isinstance(candidate, str) and candidate:
+                        added_id = candidate
+                        break
             return self._fallback_added_record(
                 memory=memory,
+                added_id=added_id,
+                added_text=added_text,
                 user_id=user_id,
                 agent_id=agent_id,
                 run_id=run_id,
@@ -604,6 +682,9 @@ class Mem0Provider(BaseMemoryProvider):
             if not isinstance(blob, (bytes, bytearray)):
                 continue
             try:
+                # Trust assumption: the qdrant store is a local, first-party
+                # file owned by this runtime. pickle.loads here is an RCE vector
+                # only if an attacker can write to that local store.
                 point = pickle.loads(blob)
             except Exception:
                 continue
@@ -716,6 +797,7 @@ class Mem0Provider(BaseMemoryProvider):
             record = self._normalize_add_result(
                 payload,
                 memory=memory,
+                added_text=self._added_text(messages),
                 user_id=user_id,
                 agent_id=agent_id,
                 run_id=run_id,

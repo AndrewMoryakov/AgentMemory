@@ -97,8 +97,8 @@ def consume_auth_code(
 def _verify_pkce(challenge: str, method: str, verifier: str) -> bool:
     if not verifier:
         return False
-    if method == "PLAIN":
-        return hmac.compare_digest(challenge, verifier)
+    # Only S256 is supported. PLAIN is rejected because the challenge equals
+    # the verifier, making intercepted auth codes fully replayable.
     if method == "S256":
         digest = hashlib.sha256(verifier.encode("ascii")).digest()
         expected = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")

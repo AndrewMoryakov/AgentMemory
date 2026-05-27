@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 
 from agentmemory.providers.claude_memory import ClaudeMemoryProvider
-from tests.provider_contract_harness import ProviderContractHarness
+try:
+    from provider_contract_harness import ProviderContractHarness
+except ModuleNotFoundError:  # pragma: no cover
+    from tests.provider_contract_harness import ProviderContractHarness
 
 
 class ClaudeMemoryProviderHarnessTests(ProviderContractHarness, unittest.TestCase):

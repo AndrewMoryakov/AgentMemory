@@ -47,7 +47,15 @@ class AgentMemoryClientsTests(unittest.TestCase):
     def test_text_config_status_detects_configured_launcher(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings.json"
-            path.write_text('{"agentmemory":{"args":["-File","O:/user files/Projects/tools/AgentMemory/scripts/run-agentmemory-mcp.ps1"]}}', encoding="utf-8")
+            # Build the config from the current machine's expected launcher so
+            # the assertion is portable: a hardcoded absolute path only matches
+            # the author's install root and reads as stale on every other host
+            # (Linux/Windows CI included).
+            launcher = agentmemory_clients.expected_launcher_path()
+            path.write_text(
+                json.dumps({"agentmemory": {"args": ["-File", launcher]}}),
+                encoding="utf-8",
+            )
             payload = agentmemory_clients.text_config_status(path, "cli-client")
             self.assertTrue(payload["configured"])
             self.assertEqual(payload["health"], "configured")
@@ -123,6 +131,52 @@ class AgentMemoryClientsTests(unittest.TestCase):
                 mock.patch.dict(agentmemory_clients.os.environ, {"XDG_CONFIG_HOME": str(xdg)}, clear=False),
             ):
                 self.assertEqual(agentmemory_clients.claude_desktop_config_path(), fallback)
+
+    def test_load_json_raises_config_parse_error_on_malformed_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mcp.json"
+            path.write_text('{"mcpServers": {},}', encoding="utf-8")  # trailing comma
+            with self.assertRaises(agentmemory_clients.ConfigParseError):
+                agentmemory_clients.load_json(path, {"mcpServers": {}})
+
+    def test_isolated_corrupt_json_yields_error_entry_without_clobbering(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mcp.json"
+            original = '{"mcpServers": {"other": {}},}'  # trailing comma -> invalid
+            path.write_text(original, encoding="utf-8")
+            backup_dir = Path(tmp) / "backups"
+            result = agentmemory_clients.isolated(
+                "cursor",
+                agentmemory_clients.merge_server_json,
+                path,
+                "mcpServers",
+                agentmemory_clients.SERVER_NAME,
+                agentmemory_clients.stdio_server_config(),
+                backup_dir,
+            )
+            self.assertEqual(result["target"], "cursor")
+            self.assertEqual(result["status"], "error")
+            self.assertIn("not valid JSON", result["reason"])
+            # The unparseable file must not be overwritten or backed up.
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertFalse(backup_dir.exists())
+
+    def test_status_all_isolates_single_corrupt_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            corrupt = Path(tmp) / "cursor" / "mcp.json"
+            corrupt.parent.mkdir(parents=True, exist_ok=True)
+            corrupt.write_text('{"mcpServers": {},}', encoding="utf-8")
+            completed = agentmemory_clients.subprocess.CompletedProcess(
+                args=["pwsh"], returncode=1, stdout="", stderr=""
+            )
+            with (
+                mock.patch.object(agentmemory_clients, "CURSOR_MCP", corrupt),
+                mock.patch.object(agentmemory_clients, "run_pwsh", return_value=completed),
+            ):
+                payload = agentmemory_clients.status_all()  # must not raise
+            cursor = next(r for r in payload["results"] if r["target"] == "cursor")
+            self.assertEqual(cursor["health"], "error")
+            self.assertIn("not valid JSON", cursor["details"])
 
     def test_client_path_overrides_take_precedence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

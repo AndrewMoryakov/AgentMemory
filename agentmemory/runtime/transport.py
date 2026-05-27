@@ -180,6 +180,11 @@ def provider_error_payload(exc: ProviderError) -> dict[str, Any]:
 def error_class_for_type(error_type: str, *, status_code: int) -> type[ProviderError]:
     if error_type in ERROR_TYPE_MAP:
         return ERROR_TYPE_MAP[error_type]
+    # Authentication/authorization failures (401/403) are not validation errors;
+    # an explicit "AuthRequired" error_type signals the same. Surface them as an
+    # availability error so the message can tell the caller to set a token.
+    if status_code in (401, 403) or error_type == "AuthRequired":
+        return ProviderUnavailableError
     return ProviderUnavailableError if status_code >= 500 else ProviderValidationError
 
 

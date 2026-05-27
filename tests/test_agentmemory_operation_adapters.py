@@ -162,6 +162,38 @@ class AgentMemoryOperationAdaptersTests(unittest.TestCase):
         with self.assertRaises(ProviderValidationError):
             http_operation_source("list", query_params={"filters": ["{"]})
 
+    def test_http_operation_source_add_synthesizes_messages_from_text(self) -> None:
+        source = http_operation_source(
+            "add",
+            payload={"text": "hello", "user_id": "u1", "memory_type": "preference"},
+        )
+
+        self.assertEqual(source["messages"], [{"role": "user", "content": "hello"}])
+        self.assertEqual(source["user_id"], "u1")
+        self.assertEqual(source["memory_type"], "preference")
+        # Matches MCP/CLI: raw `text` is preserved alongside synthesized messages.
+        self.assertEqual(source["text"], "hello")
+
+    def test_http_operation_source_add_requires_text(self) -> None:
+        with self.assertRaises(ProviderValidationError):
+            http_operation_source("add", payload={"user_id": "u1"})
+
+    def test_http_operation_source_add_rejects_unexpected_field(self) -> None:
+        with self.assertRaises(ProviderValidationError):
+            http_operation_source("add", payload={"text": "hi", "messages": []})
+
+    def test_http_operation_source_rejects_invalid_limit(self) -> None:
+        with self.assertRaises(ProviderValidationError):
+            http_operation_source("list", query_params={"limit": ["0"]})
+
+    def test_http_operation_source_search_rejects_invalid_limit(self) -> None:
+        with self.assertRaises(ProviderValidationError):
+            http_operation_source("search", payload={"query": "q", "limit": 0})
+
+    def test_http_operation_source_search_rejects_bad_enum_for_list_scopes_kind(self) -> None:
+        with self.assertRaises(ProviderValidationError):
+            http_operation_source("list_scopes", query_params={"kind": ["bogus"]})
+
 
 if __name__ == "__main__":
     unittest.main()

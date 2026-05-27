@@ -1,4 +1,5 @@
 import multiprocessing
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -144,6 +145,20 @@ class ScopeRegistryTests(unittest.TestCase):
         )
 
         self.assertEqual(expired, ["expired"])
+
+    def test_wal_mode_enabled_after_write(self) -> None:
+        scope_registry.upsert_record(
+            "mem0",
+            {"id": "1", "memory": "a", "provider": "mem0", "user_id": "user-a"},
+            self.runtime_dir,
+        )
+        db_path = scope_registry.registry_path(self.runtime_dir)
+        connection = sqlite3.connect(db_path)
+        try:
+            mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(mode.lower(), "wal")
 
     def test_concurrent_upserts_preserve_all_records(self) -> None:
         processes = [

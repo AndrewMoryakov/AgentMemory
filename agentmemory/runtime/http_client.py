@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from agentmemory.platform import launcher_command, launcher_path
-from agentmemory.runtime.config import BASE_DIR, active_provider_runtime_policy, clear_caches, current_api_host, current_api_port
+from agentmemory.runtime.config import BASE_DIR, active_provider_runtime_policy, clear_caches, current_api_host, current_api_port, read_api_pid
 from agentmemory.runtime.transport import error_class_for_type
 from agentmemory.providers.base import (
     ProviderError,
@@ -31,6 +31,22 @@ else:
     import fcntl
 
 
+def _is_owner_process() -> bool:
+    # The owner env flag is inherited by any child the API server spawns, so the
+    # flag alone is not sufficient: an inheriting child would touch the embedded
+    # backend directly and violate the single-owner lock. Confirm this process is
+    # actually the recorded API owner by matching its pid against the pid file.
+    if os.environ.get(OWNER_ENV) != "1":
+        return False
+    recorded_pid = read_api_pid()
+    if recorded_pid is None:
+        # Startup window: the real server sets the flag and writes its pid early,
+        # but before the pid file exists we trust the flag so we don't break the
+        # legitimate owner during its own boot.
+        return True
+    return recorded_pid == os.getpid()
+
+
 def should_proxy_to_api() -> bool:
     transport_mode = active_provider_runtime_policy()["transport_mode"]
     if transport_mode == "remote_only":
@@ -38,7 +54,7 @@ def should_proxy_to_api() -> bool:
             "Provider transport mode 'remote_only' requires a supported remote transport implementation; "
             "local direct execution is not available."
         )
-    return transport_mode == "owner_process_proxy" and os.environ.get(OWNER_ENV) != "1"
+    return transport_mode == "owner_process_proxy" and not _is_owner_process()
 
 
 def api_base_url() -> str:
@@ -76,6 +92,11 @@ def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> A
             message = str(exc)
             error_type = ""
         error_type_cls = error_class_for_type(error_type, status_code=exc.code)
+        if exc.code in (401, 403) or error_type == "AuthRequired":
+            message = (
+                f"AgentMemory API at {api_base_url()} requires authentication ({exc.code}). "
+                "Set AGENTMEMORY_API_TOKEN to the owner process token and retry."
+            )
         raise error_type_cls(message) from exc
     except URLError as exc:
         raise ProviderUnavailableError(f"AgentMemory API is not reachable at {api_base_url()}. Start it with `agentmemory start-api`.") from exc
@@ -117,6 +138,10 @@ def ensure_api_running() -> None:
     if api_is_healthy():
         return
 
+    # Hold the cross-process lock ONLY around the double-checked health re-check
+    # and the spawn trigger. The up-to-20s health-wait poll runs OUTSIDE the lock
+    # so parallel clients don't serialize behind it — they each poll independently
+    # until the shared deadline.
     with _api_start_lock():
         if api_is_healthy():
             return
@@ -134,11 +159,11 @@ def ensure_api_running() -> None:
         )
         clear_caches()
 
-        deadline = time.time() + API_START_TIMEOUT_SECONDS
-        while time.time() < deadline:
-            if api_is_healthy():
-                return
-            time.sleep(0.5)
+    deadline = time.time() + API_START_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        if api_is_healthy():
+            return
+        time.sleep(0.5)
 
     raise ProviderUnavailableError(f"AgentMemory API did not become ready at {api_base_url()} within {API_START_TIMEOUT_SECONDS:.0f}s")
 
