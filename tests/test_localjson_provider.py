@@ -7,7 +7,10 @@ from unittest import mock
 
 from agentmemory.providers.localjson import LocalJsonProvider
 from agentmemory.runtime import scope_registry
-from tests.provider_contract_harness import ProviderContractHarness
+try:
+    from provider_contract_harness import ProviderContractHarness
+except ModuleNotFoundError:  # pragma: no cover
+    from tests.provider_contract_harness import ProviderContractHarness
 
 
 def _add_localjson_records(runtime_dir: str, storage_path: str, count: int, prefix: str) -> None:
