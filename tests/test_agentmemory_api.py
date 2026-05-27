@@ -325,7 +325,6 @@ class AgentMemoryApiTests(unittest.TestCase):
         captured_second: list[tuple[int, object, dict[str, str]]] = []
 
         with (
-            mock.patch.object(agentmemory_api.oauth_state, "client_credentials", return_value=("client-id", "client-secret")),
             mock.patch.object(agentmemory_api.oauth_state, "verify_client_secret", return_value=True),
             mock.patch.object(agentmemory_api.oauth_state, "consume_auth_code", return_value={"scope": "mcp"}),
             mock.patch.object(agentmemory_api.oauth_state, "issue_access_token", return_value=("issued-token", 3600)),

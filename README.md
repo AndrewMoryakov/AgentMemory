@@ -287,6 +287,41 @@ macOS / Linux:
 
 These wrappers delegate to the maintained scripts in `scripts/`, so the root stays user-friendly without moving the operational implementation out of `scripts/`.
 
+## Remote MCP Connectors (Claude.ai, ChatGPT)
+
+When AgentMemory is exposed on a public URL, it speaks MCP over HTTP at
+`POST /mcp` and supports OAuth 2.1 with Dynamic Client Registration
+(RFC 7591). Hosted MCP clients like Claude.ai Custom Connectors or
+ChatGPT Custom Connectors discover the server and register themselves
+without any operator-issued client_id.
+
+Setup on Claude.ai:
+
+1. Settings → Connectors → **Add custom connector**.
+2. **Remote MCP server URL**: `https://your-host/mcp`.
+3. Save. Claude.ai fetches `/.well-known/oauth-authorization-server`,
+   POSTs to `/register` to mint its own client credentials, opens the
+   authorize page, and stores the resulting access token.
+
+No fields under "Advanced" need to be filled in. The token is bound to
+the client record persisted at `{runtime_dir}/oauth_clients.json` and
+survives container restarts.
+
+Server-side knobs:
+
+- `AGENTMEMORY_API_TOKEN` — pre-shared bearer accepted alongside OAuth.
+- `AGENTMEMORY_OAUTH_CLIENT_ID` / `_SECRET` — optional static client.
+  Not required when DCR is on (the default).
+- `AGENTMEMORY_OAUTH_DISABLE_DCR=1` — turn off `/register` (clients
+  must then be pre-shared).
+- `AGENTMEMORY_REGISTER_RATE_LIMIT_PER_HOUR` — per-IP cap on /register
+  (default 20).
+- `AGENTMEMORY_PUBLIC_URL` — the canonical https URL the server should
+  advertise in OAuth discovery.
+
+Note: access tokens are held in memory only — a server restart logs
+remote clients out, and they will silently re-authorize on next request.
+
 ## Browser UI
 
 The local API also serves a browser UI at:

@@ -3,7 +3,6 @@ authorize / token flow integration."""
 
 import base64
 import hashlib
-import io
 import json
 import os
 import tempfile
@@ -14,6 +13,8 @@ from pathlib import Path
 import agentmemory.api as agentmemory_api
 import agentmemory.oauth as oauth_state
 
+from tests._handler_factory import make_handler as _make_handler
+
 
 AUTH_ENV_KEYS = (
     "AGENTMEMORY_API_TOKEN",
@@ -22,18 +23,9 @@ AUTH_ENV_KEYS = (
     "AGENTMEMORY_OAUTH_STORE",
     "AGENTMEMORY_OAUTH_DISABLE_DCR",
     "AGENTMEMORY_RATE_LIMIT_PER_MINUTE",
+    "AGENTMEMORY_REGISTER_RATE_LIMIT_PER_HOUR",
     "AGENTMEMORY_PUBLIC_URL",
 )
-
-
-def _make_handler(*, path: str, method: str = "POST", body: bytes = b"{}", headers=None):
-    handler = agentmemory_api.Handler.__new__(agentmemory_api.Handler)
-    handler.path = path
-    handler.headers = {"Content-Length": str(len(body)), **(headers or {})}
-    handler.rfile = io.BytesIO(body)
-    handler.wfile = io.BytesIO()
-    handler.client_address = ("127.0.0.1", 0)
-    return handler
 
 
 def _pkce_pair():
@@ -179,6 +171,22 @@ class OAuthDcrTests(unittest.TestCase):
 
         self.assertEqual(captured[0][0], 400)
         self.assertEqual(captured[0][1]["error"], "invalid_client_metadata")
+
+    def test_register_returns_429_when_per_ip_hourly_limit_exceeded(self) -> None:
+        os.environ["AGENTMEMORY_REGISTER_RATE_LIMIT_PER_HOUR"] = "2"
+        body = json.dumps({"redirect_uris": ["https://x.example/cb"]}).encode("utf-8")
+
+        captured: list = []
+        for _ in range(3):
+            handler = _make_handler(path="/register", body=body)
+            handler._send = lambda status, payload, headers=None: captured.append((status, payload, headers or {}))
+            handler.do_POST()
+
+        self.assertEqual(captured[0][0], 201)
+        self.assertEqual(captured[1][0], 201)
+        self.assertEqual(captured[2][0], 429)
+        self.assertEqual(captured[2][1]["error_type"], "RateLimitExceeded")
+        self.assertIn("Retry-After", captured[2][2])
 
     def test_register_disabled_returns_404(self) -> None:
         os.environ["AGENTMEMORY_OAUTH_DISABLE_DCR"] = "1"

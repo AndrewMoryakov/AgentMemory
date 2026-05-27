@@ -53,6 +53,7 @@ SPA_ROUTES = {"/", "/me"}
 SPA_ROOT_ASSETS = {"/favicon.ico", "/vite.svg", "/manifest.webmanifest", "/robots.txt"}
 DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
 DEFAULT_RATE_LIMIT_PER_MINUTE = 60
+DEFAULT_REGISTER_RATE_LIMIT_PER_HOUR = 20
 
 
 class RequestBodyTooLarge(ProviderValidationError):
@@ -136,37 +137,19 @@ def _rate_limit_per_minute() -> int:
     return value if value > 0 else DEFAULT_RATE_LIMIT_PER_MINUTE
 
 
+def _register_rate_limit_per_hour() -> int:
+    raw = os.environ.get("AGENTMEMORY_REGISTER_RATE_LIMIT_PER_HOUR", "").strip()
+    if not raw:
+        return DEFAULT_REGISTER_RATE_LIMIT_PER_HOUR
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_REGISTER_RATE_LIMIT_PER_HOUR
+    return value if value > 0 else DEFAULT_REGISTER_RATE_LIMIT_PER_HOUR
+
+
 def _ui_disabled() -> bool:
     return os.environ.get("AGENTMEMORY_DISABLE_UI", "").strip() in {"1", "true", "yes"}
-
-
-_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
-
-
-def _redirect_uri_allowed(redirect_uri: str) -> bool:
-    """Validate an OAuth redirect_uri.
-
-    Parses the URI and matches the hostname exactly so that prefix-spoofing
-    tricks (e.g. ``http://127.0.0.1.evil.com``, ``http://localhost@evil.com``)
-    are rejected. https is allowed with any host; http is only allowed for
-    loopback hosts. Any userinfo (``@``) is rejected outright.
-    """
-    if not redirect_uri:
-        return False
-    try:
-        parsed = urlparse(redirect_uri)
-    except ValueError:
-        return False
-    # Reject userinfo tricks like http://127.0.0.1@evil.com
-    if parsed.username is not None or parsed.password is not None or "@" in (parsed.netloc or ""):
-        return False
-    scheme = (parsed.scheme or "").lower()
-    hostname = (parsed.hostname or "").lower()
-    if scheme == "https":
-        return bool(hostname)
-    if scheme == "http":
-        return hostname in _LOOPBACK_HOSTS
-    return False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -371,12 +354,11 @@ class Handler(BaseHTTPRequestHandler):
         if client_record is None:
             self._send(400, {"error": "invalid_client"})
             return
-        # Two-layer check: scheme/host safety, then per-client allowlist.
-        if not _redirect_uri_allowed(redirect_uri):
-            self._send(400, {"error": "invalid_request", "error_description": "redirect_uri must be https or loopback"})
-            return
         if not oauth_state.redirect_uri_allowed(client_record, redirect_uri):
-            self._send(400, {"error": "invalid_request", "error_description": "redirect_uri not allowed for this client"})
+            self._send(400, {
+                "error": "invalid_request",
+                "error_description": "redirect_uri must be https/loopback and registered for this client",
+            })
             return
         if response_type != "code":
             self._send(400, {"error": "unsupported_response_type"})
@@ -417,14 +399,29 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "registration_disabled"})
             return
 
-        # Anonymous endpoint — protect with per-IP rate limit so a runaway
-        # client can't fill the on-disk registry.
+        # Anonymous endpoint — keep a much tighter per-IP cap than the generic
+        # API limiter, so a single source cannot churn the on-disk registry
+        # and evict legitimate clients via FIFO.
         peer = "unknown"
         try:
             peer = self.client_address[0]
         except Exception:
             pass
-        if not self._require_rate_limit(f"oauth-register:{peer}"):
+        allowed, retry_after = _RATE_LIMITER.allow(
+            f"oauth-register:{peer}",
+            capacity=_register_rate_limit_per_hour(),
+            period_seconds=3600.0,
+        )
+        if not allowed:
+            self._send(
+                429,
+                {
+                    "error": "Rate limit exceeded",
+                    "error_type": "RateLimitExceeded",
+                    "message": "Too many client registrations. Retry later.",
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
             return
 
         try:

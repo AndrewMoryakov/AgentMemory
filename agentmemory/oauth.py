@@ -18,7 +18,7 @@ ACCESS_TOKEN_TTL_SECONDS = 7 * 24 * 3600
 
 # Defensive upper bound to keep the on-disk registry small in case /register
 # is hammered. Old registrations are evicted FIFO once the cap is hit.
-MAX_REGISTERED_CLIENTS = 1000
+MAX_REGISTERED_CLIENTS = 10_000
 
 CLIENT_STORE_FILENAME = "oauth_clients.json"
 CLIENT_STORE_VERSION = 1
@@ -98,16 +98,6 @@ def static_client_record() -> dict[str, Any] | None:
     }
 
 
-def client_credentials() -> tuple[str, str] | None:
-    """Legacy accessor for env-configured client. Used by callers that want
-    to know whether a pre-shared client exists at all (e.g. discovery)."""
-    client_id = os.environ.get("AGENTMEMORY_OAUTH_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("AGENTMEMORY_OAUTH_CLIENT_SECRET", "").strip()
-    if not client_id or not client_secret:
-        return None
-    return client_id, client_secret
-
-
 def oauth_enabled() -> bool:
     """Static OAuth credentials are configured.
 
@@ -152,18 +142,8 @@ def lookup_client(client_id: str) -> dict[str, Any] | None:
     return dict(record)
 
 
-def verify_client_secret(client_id: str | None, presented: str | None) -> bool:
-    """Verify a presented client secret against the record for ``client_id``.
-
-    Backward-compatible: if ``client_id`` is None (older callers), fall back
-    to verifying only against the static env-configured client.
-    """
-    if client_id is None:
-        static = static_client_record()
-        if static is None or not presented:
-            return False
-        return _verify_hashed_secret(presented, static["client_secret_hash"])
-    if not presented:
+def verify_client_secret(client_id: str, presented: str | None) -> bool:
+    if not client_id or not presented:
         return False
     record = lookup_client(client_id)
     if record is None:
@@ -171,10 +151,11 @@ def verify_client_secret(client_id: str | None, presented: str | None) -> bool:
     return _verify_hashed_secret(presented, record["client_secret_hash"])
 
 
-def _scheme_host_safe(redirect_uri: str) -> bool:
+def scheme_host_safe(redirect_uri: str) -> bool:
     """Reject scheme-spoofing tricks (http://127.0.0.1.evil.com,
     http://127.0.0.1@evil.com, etc.) by parsing the URI and matching
-    the hostname exactly. https permits any host; http only loopback."""
+    the hostname exactly. https permits any host; http only loopback.
+    Userinfo is rejected outright."""
     if not redirect_uri:
         return False
     try:
@@ -193,11 +174,12 @@ def _scheme_host_safe(redirect_uri: str) -> bool:
 
 
 def redirect_uri_allowed(record: dict[str, Any], redirect_uri: str) -> bool:
-    if not _scheme_host_safe(redirect_uri):
+    if not scheme_host_safe(redirect_uri):
         return False
     registered = record.get("redirect_uris") or []
+    # Static env-configured clients store no allowlist — any safe scheme
+    # passes, matching pre-DCR behavior.
     if not registered:
-        # Legacy static client: any safe scheme is acceptable.
         return True
     return redirect_uri in registered
 
@@ -302,7 +284,7 @@ def _validate_redirect_uri(value: Any) -> str:
         raise RegistrationError("invalid_redirect_uri", "redirect_uris entries must be non-empty strings")
     if len(value) > 1024:
         raise RegistrationError("invalid_redirect_uri", "redirect_uri exceeds 1024 characters")
-    if not _scheme_host_safe(value):
+    if not scheme_host_safe(value):
         raise RegistrationError(
             "invalid_redirect_uri",
             "redirect_uris must use https:// or loopback (http://127.0.0.1, http://localhost, http://[::1]) "
@@ -322,7 +304,8 @@ def register_client(payload: dict[str, Any]) -> dict[str, Any]:
         raise RegistrationError("invalid_redirect_uri", "redirect_uris is required and must be a non-empty array")
     if len(raw_redirects) > 16:
         raise RegistrationError("invalid_redirect_uri", "Too many redirect_uris (max 16)")
-    redirect_uris = [_validate_redirect_uri(item) for item in raw_redirects]
+    validated = [_validate_redirect_uri(item) for item in raw_redirects]
+    redirect_uris = list(dict.fromkeys(validated))
 
     grant_types = payload.get("grant_types") or ["authorization_code"]
     if not isinstance(grant_types, list) or any(not isinstance(g, str) for g in grant_types):
