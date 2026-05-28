@@ -23,11 +23,15 @@ MAX_REGISTERED_CLIENTS = 10_000
 CLIENT_STORE_FILENAME = "oauth_clients.json"
 CLIENT_STORE_VERSION = 1
 
+TOKEN_STORE_FILENAME = "oauth_tokens.json"
+TOKEN_STORE_VERSION = 1
+
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 _LOCK = Lock()
 _AUTH_CODES: dict[str, dict[str, Any]] = {}
 _ACCESS_TOKENS: dict[str, dict[str, Any]] = {}
+_TOKENS_LOADED = False
 
 _STORE_LOCK = Lock()
 
@@ -188,12 +192,71 @@ def _now() -> float:
     return time.time()
 
 
-def _purge_expired() -> None:
+def _token_store_path() -> Path:
+    from agentmemory.runtime.config import RUNTIME_DIR
+
+    override = os.environ.get("AGENTMEMORY_OAUTH_TOKEN_STORE", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(RUNTIME_DIR) / TOKEN_STORE_FILENAME
+
+
+def _load_token_store_from_disk() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    path = _token_store_path()
+    if not path.exists():
+        return {}, {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}, {}
+    if not isinstance(payload, dict):
+        return {}, {}
+    auth_codes = payload.get("auth_codes") if isinstance(payload.get("auth_codes"), dict) else {}
+    access_tokens = payload.get("access_tokens") if isinstance(payload.get("access_tokens"), dict) else {}
+    return dict(auth_codes), dict(access_tokens)
+
+
+def _save_token_store() -> None:
+    """Persist current in-memory token state. Caller must hold _LOCK."""
+    from agentmemory.runtime.atomic_io import atomic_write_json
+
+    path = _token_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(
+        path,
+        {
+            "version": TOKEN_STORE_VERSION,
+            "auth_codes": _AUTH_CODES,
+            "access_tokens": _ACCESS_TOKENS,
+        },
+        ensure_ascii=True,
+        encoding="utf-8",
+    )
+
+
+def _ensure_tokens_loaded() -> None:
+    """Populate the in-memory token dicts from disk on first use.
+    Caller must hold _LOCK."""
+    global _TOKENS_LOADED
+    if _TOKENS_LOADED:
+        return
+    auth_codes, access_tokens = _load_token_store_from_disk()
+    _AUTH_CODES.update(auth_codes)
+    _ACCESS_TOKENS.update(access_tokens)
+    _TOKENS_LOADED = True
+
+
+def _purge_expired() -> bool:
+    """Drop expired entries. Returns True iff anything was removed.
+    Caller must hold _LOCK."""
     now = _now()
+    removed = False
     for store in (_AUTH_CODES, _ACCESS_TOKENS):
         for key in list(store.keys()):
             if store[key]["expires_at"] <= now:
                 store.pop(key, None)
+                removed = True
+    return removed
 
 
 def issue_auth_code(
@@ -207,6 +270,7 @@ def issue_auth_code(
 ) -> str:
     code = secrets.token_urlsafe(32)
     with _LOCK:
+        _ensure_tokens_loaded()
         _purge_expired()
         _AUTH_CODES[code] = {
             "client_id": client_id,
@@ -217,6 +281,7 @@ def issue_auth_code(
             "resource": resource,
             "expires_at": _now() + AUTH_CODE_TTL_SECONDS,
         }
+        _save_token_store()
     return code
 
 
@@ -228,8 +293,11 @@ def consume_auth_code(
     code_verifier: str,
 ) -> dict[str, Any] | None:
     with _LOCK:
+        _ensure_tokens_loaded()
         _purge_expired()
         entry = _AUTH_CODES.pop(code, None)
+        if entry is not None:
+            _save_token_store()
     if entry is None:
         return None
     if entry["client_id"] != client_id:
@@ -256,11 +324,13 @@ def _verify_pkce(challenge: str, method: str, verifier: str) -> bool:
 def issue_access_token(*, client_id: str, scope: str | None = None) -> tuple[str, int]:
     token = secrets.token_urlsafe(32)
     with _LOCK:
+        _ensure_tokens_loaded()
         _ACCESS_TOKENS[token] = {
             "client_id": client_id,
             "scope": scope,
             "expires_at": _now() + ACCESS_TOKEN_TTL_SECONDS,
         }
+        _save_token_store()
     return token, ACCESS_TOKEN_TTL_SECONDS
 
 
@@ -268,7 +338,11 @@ def validate_access_token(token: str) -> bool:
     if not token:
         return False
     with _LOCK:
-        _purge_expired()
+        _ensure_tokens_loaded()
+        # Only persist if the purge actually removed something — keeps the
+        # common (token still valid, nothing expired) path a pure read.
+        if _purge_expired():
+            _save_token_store()
         return token in _ACCESS_TOKENS
 
 
@@ -385,12 +459,24 @@ def register_client(payload: dict[str, Any]) -> dict[str, Any]:
 
 def reset_client_registry_for_tests() -> None:
     """Test-only helper; not part of the public OAuth surface."""
+    global _TOKENS_LOADED
     with _STORE_LOCK:
-        path = _client_store_path()
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+        for path in (_client_store_path(), _token_store_path()):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
     with _LOCK:
         _AUTH_CODES.clear()
         _ACCESS_TOKENS.clear()
+        _TOKENS_LOADED = False
+
+
+def _reload_token_store_for_tests() -> None:
+    """Simulate a process restart: drop in-memory tokens, force reload
+    from disk on next access."""
+    global _TOKENS_LOADED
+    with _LOCK:
+        _AUTH_CODES.clear()
+        _ACCESS_TOKENS.clear()
+        _TOKENS_LOADED = False

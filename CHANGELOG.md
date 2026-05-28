@@ -9,9 +9,10 @@ The format is intentionally simple during public alpha.
 ### Added
 
 - OAuth 2.1 Dynamic Client Registration (RFC 7591). Remote MCP clients (Claude.ai, ChatGPT Custom Connectors) can now self-register against `POST /register`; discovery at `/.well-known/oauth-authorization-server` advertises `registration_endpoint`. Registered clients persist to `{runtime_dir}/oauth_clients.json` with SHA-256 hashed secrets, FIFO eviction at 10 000 entries
+- Persistent OAuth token store at `{runtime_dir}/oauth_tokens.json`. Authorization codes and access tokens now survive container restarts — remote MCP clients no longer get silently logged out on redeploy
 - `AGENTMEMORY_OAUTH_DISABLE_DCR` to opt out of dynamic registration (clients must then be pre-shared via `AGENTMEMORY_OAUTH_CLIENT_ID`/`SECRET`)
 - `AGENTMEMORY_REGISTER_RATE_LIMIT_PER_HOUR` (default 20) per-IP cap on registrations
-- `AGENTMEMORY_OAUTH_STORE` to override the registered-clients JSON path (mostly for tests)
+- `AGENTMEMORY_OAUTH_STORE` and `AGENTMEMORY_OAUTH_TOKEN_STORE` to override the registry/token JSON paths (mostly for tests)
 
 ### Changed
 

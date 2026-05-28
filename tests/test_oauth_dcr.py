@@ -21,6 +21,7 @@ AUTH_ENV_KEYS = (
     "AGENTMEMORY_OAUTH_CLIENT_ID",
     "AGENTMEMORY_OAUTH_CLIENT_SECRET",
     "AGENTMEMORY_OAUTH_STORE",
+    "AGENTMEMORY_OAUTH_TOKEN_STORE",
     "AGENTMEMORY_OAUTH_DISABLE_DCR",
     "AGENTMEMORY_RATE_LIMIT_PER_MINUTE",
     "AGENTMEMORY_REGISTER_RATE_LIMIT_PER_HOUR",
@@ -43,7 +44,9 @@ class OAuthDcrTests(unittest.TestCase):
 
         self._tmpdir = tempfile.TemporaryDirectory()
         self._store_path = Path(self._tmpdir.name) / "oauth_clients.json"
+        self._token_store_path = Path(self._tmpdir.name) / "oauth_tokens.json"
         os.environ["AGENTMEMORY_OAUTH_STORE"] = str(self._store_path)
+        os.environ["AGENTMEMORY_OAUTH_TOKEN_STORE"] = str(self._token_store_path)
         os.environ["AGENTMEMORY_PUBLIC_URL"] = "https://example.test"
 
         agentmemory_api._RATE_LIMITER.reset()
@@ -326,6 +329,62 @@ class OAuthDcrTests(unittest.TestCase):
 
         self.assertEqual(captured[0][0], 401)
         self.assertEqual(captured[0][1]["error"], "invalid_client")
+
+    # ---------- token persistence ----------
+
+    def test_access_token_survives_simulated_restart(self) -> None:
+        token, _ttl = oauth_state.issue_access_token(client_id="some-client", scope="mcp")
+        self.assertTrue(oauth_state.validate_access_token(token))
+
+        # Simulate process restart: drop in-memory state, keep the file on disk
+        oauth_state._reload_token_store_for_tests()
+
+        self.assertTrue(oauth_state.validate_access_token(token))
+        self.assertTrue(self._token_store_path.exists())
+
+    def test_expired_access_token_dropped_on_load(self) -> None:
+        oauth_state.issue_access_token(client_id="some-client")
+        # Force-expire all tokens on disk
+        with oauth_state._LOCK:
+            for entry in oauth_state._ACCESS_TOKENS.values():
+                entry["expires_at"] = 0
+            oauth_state._save_token_store()
+        oauth_state._reload_token_store_for_tests()
+
+        # validate triggers load + purge
+        self.assertFalse(oauth_state.validate_access_token("anything"))
+        self.assertEqual(oauth_state._ACCESS_TOKENS, {})
+
+    def test_auth_code_survives_simulated_restart(self) -> None:
+        verifier, challenge = _pkce_pair()
+        code = oauth_state.issue_auth_code(
+            client_id="some-client",
+            redirect_uri="https://x.example/cb",
+            code_challenge=challenge,
+            code_challenge_method="S256",
+            scope="mcp",
+        )
+
+        oauth_state._reload_token_store_for_tests()
+
+        entry = oauth_state.consume_auth_code(
+            code=code,
+            client_id="some-client",
+            redirect_uri="https://x.example/cb",
+            code_verifier=verifier,
+        )
+        self.assertIsNotNone(entry)
+
+    def test_reset_clears_both_stores(self) -> None:
+        self._register_client("https://x.example/cb")
+        oauth_state.issue_access_token(client_id="some-client")
+        self.assertTrue(self._store_path.exists())
+        self.assertTrue(self._token_store_path.exists())
+
+        oauth_state.reset_client_registry_for_tests()
+
+        self.assertFalse(self._store_path.exists())
+        self.assertFalse(self._token_store_path.exists())
 
     # ---------- backward compat: static env client ----------
 

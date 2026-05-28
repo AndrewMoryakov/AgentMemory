@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# Backup AgentMemory runtime state (Qdrant + SQLite + localjson snapshots)
-# plus the .env and runtime config into a dated tarball.
+# Backup AgentMemory runtime state plus the .env and runtime config into
+# a dated tarball.
+#
+# What ends up in the archive:
+#   - data volume snapshot (Qdrant + SQLite + localjson) — taken from the
+#     container so file locks flush cleanly. This volume also holds
+#     `oauth_clients.json` (registered DCR clients) and `oauth_tokens.json`
+#     (active access tokens), so a restored backup preserves remote MCP
+#     sessions instead of forcing every connected client to re-authorize.
+#   - .env, deploy/agentmemory.config.json, deploy/xray-proxy.json,
+#     deploy/docker-compose.yml from the host.
 #
 # Usage on the server:
 #   /opt/agentmemory/deploy/backup-agentmemory.sh               # default /var/backups/agentmemory

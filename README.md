@@ -303,9 +303,9 @@ Setup on Claude.ai:
    POSTs to `/register` to mint its own client credentials, opens the
    authorize page, and stores the resulting access token.
 
-No fields under "Advanced" need to be filled in. The token is bound to
-the client record persisted at `{runtime_dir}/oauth_clients.json` and
-survives container restarts.
+No fields under "Advanced" need to be filled in. Client records persist
+at `{runtime_dir}/oauth_clients.json` and issued tokens at
+`{runtime_dir}/oauth_tokens.json` — both survive container restarts.
 
 Server-side knobs:
 
@@ -318,9 +318,6 @@ Server-side knobs:
   (default 20).
 - `AGENTMEMORY_PUBLIC_URL` — the canonical https URL the server should
   advertise in OAuth discovery.
-
-Note: access tokens are held in memory only — a server restart logs
-remote clients out, and they will silently re-authorize on next request.
 
 ## Browser UI
 
