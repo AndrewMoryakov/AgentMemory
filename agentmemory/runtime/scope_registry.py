@@ -166,6 +166,30 @@ def _parse_expires_at(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+# SQL fragment that excludes scope_registry rows already past their
+# expires_at. Bound to a single parameter — the current UTC time as an
+# isoformat() string with explicit "+00:00" suffix. We normalize the
+# stored expires_at the same way (REPLACE 'Z' -> '+00:00') so legacy
+# rows written before we standardised on +00:00 still compare correctly.
+# The REPLACE() defeats the (provider, expires_at) index, but the
+# function is called once per inventory aggregation, not per row of a
+# scan, and at our scale a full table scan is still sub-millisecond.
+_NOT_YET_EXPIRED_CLAUSE = (
+    "AND ("
+    "expires_at IS NULL OR expires_at = '' "
+    "OR REPLACE(expires_at, 'Z', '+00:00') > ?"
+    ")"
+)
+
+
+def _bind_now_iso(now: datetime | None = None) -> str:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now.astimezone(timezone.utc).isoformat()
+
+
 def _normalized_row(provider_name: str, record: MemoryRecord) -> tuple[str, str, str | None, str | None, str | None, str | None, str | None, str | None]:
     return (
         provider_name,
@@ -358,9 +382,12 @@ def _inventory_items_and_totals(
     kind: str | None,
     query: str | None,
     runtime_dir: str,
+    *,
+    now: datetime | None = None,
 ) -> tuple[list[ScopeInventoryItem], dict[str, int]]:
     if kind is not None:
         _scope_kind_field(kind)
+    now_iso = _bind_now_iso(now)
     params: list[Any] = []
     query_clause = ""
     if isinstance(query, str) and query:
@@ -382,11 +409,13 @@ def _inventory_items_and_totals(
             WHERE provider = ?
               AND {field_name} IS NOT NULL
               AND TRIM({field_name}) != ''
+              {_NOT_YET_EXPIRED_CLAUSE}
               {clause}
             GROUP BY {field_name}
             """
         )
         inventory_params.append(provider_name)
+        inventory_params.append(now_iso)
         inventory_params.extend(params)
 
     inventory_sql = " UNION ALL ".join(inventory_sql_parts)
@@ -438,8 +467,16 @@ def _inventory_items_and_totals(
     return items, totals
 
 
-def list_inventory(provider_name: str, limit: int, kind: str | None, query: str | None, runtime_dir: str) -> ScopeInventory:
-    items, totals = _inventory_items_and_totals(provider_name, kind, query, runtime_dir)
+def list_inventory(
+    provider_name: str,
+    limit: int,
+    kind: str | None,
+    query: str | None,
+    runtime_dir: str,
+    *,
+    now: datetime | None = None,
+) -> ScopeInventory:
+    items, totals = _inventory_items_and_totals(provider_name, kind, query, runtime_dir, now=now)
     return {"provider": provider_name, "items": items[:limit], "totals": totals}
 
 
@@ -451,6 +488,7 @@ def list_inventory_page(
     kind: str | None,
     query: str | None,
     runtime_dir: str,
+    now: datetime | None = None,
 ) -> ScopeInventoryPage:
     if limit < 1:
         raise ProviderValidationError("Scope inventory page limit must be at least 1.")
@@ -458,6 +496,7 @@ def list_inventory_page(
     if kind is not None:
         _scope_kind_field(kind)
 
+    now_iso = _bind_now_iso(now)
     params: list[Any] = []
     query_clause = ""
     if isinstance(query, str) and query:
@@ -479,11 +518,13 @@ def list_inventory_page(
             WHERE provider = ?
               AND {field_name} IS NOT NULL
               AND TRIM({field_name}) != ''
+              {_NOT_YET_EXPIRED_CLAUSE}
               {clause}
             GROUP BY {field_name}
             """
         )
         inventory_params.append(provider_name)
+        inventory_params.append(now_iso)
         inventory_params.extend(params)
     inventory_sql = " UNION ALL ".join(inventory_sql_parts)
     filter_sql = " WHERE kind = ?" if kind is not None else ""

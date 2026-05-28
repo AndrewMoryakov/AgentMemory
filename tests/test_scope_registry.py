@@ -146,6 +146,115 @@ class ScopeRegistryTests(unittest.TestCase):
 
         self.assertEqual(expired, ["expired"])
 
+    def test_list_inventory_excludes_expired_records(self) -> None:
+        # Mixed fixture: one expired record + one fresh + one permanent.
+        # Inventory and totals must reflect only the live ones — the
+        # expired row is a ghost until the TTL sweeper hard-deletes it.
+        scope_registry.replace_provider_records(
+            "mem0",
+            [
+                {
+                    "id": "ghost",
+                    "memory": "expired",
+                    "provider": "mem0",
+                    "user_id": "u-expired",
+                    "metadata": {"expires_at": "2026-04-22T00:00:00+00:00"},
+                },
+                {
+                    "id": "fresh",
+                    "memory": "still alive",
+                    "provider": "mem0",
+                    "user_id": "u-fresh",
+                    "metadata": {"expires_at": "2030-01-01T00:00:00+00:00"},
+                },
+                {
+                    "id": "permanent",
+                    "memory": "no expiry",
+                    "provider": "mem0",
+                    "user_id": "u-permanent",
+                },
+            ],
+            self.runtime_dir,
+        )
+        pinned_now = datetime(2026, 4, 23, 0, 0, tzinfo=timezone.utc)
+
+        inventory = scope_registry.list_inventory(
+            "mem0", 10, None, None, self.runtime_dir, now=pinned_now,
+        )
+
+        values = sorted(item["value"] for item in inventory["items"])
+        self.assertEqual(values, ["u-fresh", "u-permanent"])
+        self.assertEqual(inventory["totals"], {"users": 2, "agents": 0, "runs": 0})
+
+    def test_list_inventory_page_excludes_expired_records(self) -> None:
+        scope_registry.replace_provider_records(
+            "mem0",
+            [
+                {
+                    "id": "ghost",
+                    "memory": "expired",
+                    "provider": "mem0",
+                    "user_id": "u-expired",
+                    "metadata": {"expires_at": "2026-04-22T00:00:00+00:00"},
+                },
+                {
+                    "id": "fresh",
+                    "memory": "still alive",
+                    "provider": "mem0",
+                    "user_id": "u-fresh",
+                    "metadata": {"expires_at": "2030-01-01T00:00:00+00:00"},
+                },
+            ],
+            self.runtime_dir,
+        )
+        pinned_now = datetime(2026, 4, 23, 0, 0, tzinfo=timezone.utc)
+
+        page = scope_registry.list_inventory_page(
+            "mem0",
+            limit=10,
+            cursor=None,
+            kind=None,
+            query=None,
+            runtime_dir=self.runtime_dir,
+            now=pinned_now,
+        )
+
+        values = [item["value"] for item in page["items"]]
+        self.assertEqual(values, ["u-fresh"])
+        self.assertEqual(page["totals"], {"users": 1, "agents": 0, "runs": 0})
+
+    def test_list_inventory_handles_z_suffix_expires_at(self) -> None:
+        # Legacy / hand-written records may use the "Z" suffix instead of
+        # "+00:00". The filter must treat them identically.
+        scope_registry.replace_provider_records(
+            "mem0",
+            [
+                {
+                    "id": "ghost-z",
+                    "memory": "expired Z form",
+                    "provider": "mem0",
+                    "user_id": "u-ghost-z",
+                    "metadata": {"expires_at": "2026-04-22T00:00:00Z"},
+                },
+                {
+                    "id": "fresh-z",
+                    "memory": "fresh Z form",
+                    "provider": "mem0",
+                    "user_id": "u-fresh-z",
+                    "metadata": {"expires_at": "2030-01-01T00:00:00Z"},
+                },
+            ],
+            self.runtime_dir,
+        )
+        pinned_now = datetime(2026, 4, 23, 0, 0, tzinfo=timezone.utc)
+
+        inventory = scope_registry.list_inventory(
+            "mem0", 10, None, None, self.runtime_dir, now=pinned_now,
+        )
+
+        values = [item["value"] for item in inventory["items"]]
+        self.assertEqual(values, ["u-fresh-z"])
+
     def test_wal_mode_enabled_after_write(self) -> None:
         scope_registry.upsert_record(
             "mem0",
