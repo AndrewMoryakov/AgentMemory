@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import agentmemory.runtime.http_client as agentmemory_http_client
 from agentmemory.providers.base import (
@@ -71,7 +72,13 @@ class AgentMemoryHttpClientTests(unittest.TestCase):
         try:
             agentmemory_http_client.active_provider_runtime_policy = lambda: {"transport_mode": "owner_process_proxy"}  # type: ignore[assignment]
             os.environ[agentmemory_http_client.OWNER_ENV] = "1"
-            self.assertFalse(agentmemory_http_client.should_proxy_to_api())
+            # _is_owner_process consults the recorded API pid; mock it to
+            # the current pid so the test is hermetic from any in-progress
+            # API server that may be writing to data/agentmemory-api.pid
+            # (this is what trips the test under `docker exec` against a
+            # live container).
+            with mock.patch.object(agentmemory_http_client, "read_api_pid", return_value=os.getpid()):
+                self.assertFalse(agentmemory_http_client.should_proxy_to_api())
         finally:
             agentmemory_http_client.active_provider_runtime_policy = original_runtime_policy  # type: ignore[assignment]
             if original_owner is None:

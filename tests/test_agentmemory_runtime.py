@@ -13,12 +13,21 @@ from agentmemory.runtime import scope_registry
 
 
 class AgentMemoryRuntimeTests(unittest.TestCase):
+    _OVERRIDDEN_ENV_KEYS = ("AGENTMEMORY_API_HOST", "AGENTMEMORY_API_PORT")
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         base = Path(self.temp_dir.name)
 
         self.original_config_path = agentmemory_runtime.CONFIG_PATH
         self.original_env_path = agentmemory_runtime.ENV_PATH
+        # current_api_host/port consult these env vars first, falling back
+        # to the runtime config. Tests in this class write to the config
+        # and assert on the resulting runtime_info, so the env override
+        # has to be off for the duration.
+        self._saved_env = {key: os.environ.get(key) for key in self._OVERRIDDEN_ENV_KEYS}
+        for key in self._OVERRIDDEN_ENV_KEYS:
+            os.environ.pop(key, None)
 
         agentmemory_runtime.CONFIG_PATH = base / "agentmemory.config.json"
         agentmemory_runtime.ENV_PATH = base / ".env"
@@ -28,6 +37,11 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         agentmemory_runtime.CONFIG_PATH = self.original_config_path
         agentmemory_runtime.ENV_PATH = self.original_env_path
         agentmemory_runtime.clear_caches()
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         self.temp_dir.cleanup()
 
     def test_default_runtime_config_is_used_when_file_is_missing(self) -> None:

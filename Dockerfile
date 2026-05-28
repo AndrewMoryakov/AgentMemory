@@ -18,6 +18,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md LICENSE ./
 COPY agentmemory ./agentmemory
+COPY docs ./docs
 COPY --from=web-builder /app/web/dist ./web/dist
 
 RUN pip install --no-cache-dir --upgrade pip && \
