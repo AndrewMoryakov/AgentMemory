@@ -82,6 +82,19 @@ def _save_store(store: dict[str, Any]) -> None:
     path = _client_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(path, store, ensure_ascii=True, encoding="utf-8")
+    _restrict_to_owner(path)
+
+
+def _restrict_to_owner(path: Path) -> None:
+    """Tighten a credential file to 0600 explicitly. tempfile already
+    creates the temp at 0600 on POSIX and os.replace preserves it, but
+    relying on that is a footgun — make the intent explicit so a future
+    swap of atomic_write_json cannot silently widen access. Best-effort:
+    Windows ignores most bits."""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def static_client_record() -> dict[str, Any] | None:
@@ -232,6 +245,7 @@ def _save_token_store() -> None:
         ensure_ascii=True,
         encoding="utf-8",
     )
+    _restrict_to_owner(path)
 
 
 def _ensure_tokens_loaded() -> None:

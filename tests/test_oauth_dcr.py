@@ -5,6 +5,8 @@ import base64
 import hashlib
 import json
 import os
+import stat
+import sys
 import tempfile
 import unittest
 import urllib.parse
@@ -374,6 +376,19 @@ class OAuthDcrTests(unittest.TestCase):
             code_verifier=verifier,
         )
         self.assertIsNotNone(entry)
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission semantics")
+    def test_credential_stores_are_owner_only(self) -> None:
+        self._register_client("https://x.example/cb")
+        oauth_state.issue_access_token(client_id="some-client")
+
+        for path in (self._store_path, self._token_store_path):
+            mode = stat.S_IMODE(path.stat().st_mode)
+            self.assertEqual(
+                mode,
+                0o600,
+                f"{path.name} should be 0600, got {oct(mode)}",
+            )
 
     def test_reset_clears_both_stores(self) -> None:
         self._register_client("https://x.example/cb")
