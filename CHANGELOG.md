@@ -8,6 +8,7 @@ The format is intentionally simple during public alpha.
 
 ### Added
 
+- `memory_add` now surfaces all records when the provider produces a fan-out from a single call (e.g. mem0 with `infer=true` splitting input into multiple extracted facts). The primary record is returned as before; the remaining writes are exposed verbatim under `additional_records` on the primary, each a full `MemoryRecord` with its own id and metadata. The mem0 adapter also syncs every fan-out id to the scope registry so `list_scopes` counts and the TTL sweeper see them.
 - OAuth 2.1 Dynamic Client Registration (RFC 7591). Remote MCP clients (Claude.ai, ChatGPT Custom Connectors) can now self-register against `POST /register`; discovery at `/.well-known/oauth-authorization-server` advertises `registration_endpoint`. Registered clients persist to `{runtime_dir}/oauth_clients.json` with SHA-256 hashed secrets, FIFO eviction at 10 000 entries
 - Persistent OAuth token store at `{runtime_dir}/oauth_tokens.json`. Authorization codes and access tokens now survive container restarts — remote MCP clients no longer get silently logged out on redeploy
 - OAuth refresh tokens (RFC 6749 §6). `POST /oauth/token` accepts `grant_type=refresh_token` and returns a new access+refresh pair; the old refresh token is invalidated on use (rotation, per OAuth 2.1 security BCP). Refresh-token TTL is 30 days; access-token TTL stays at 7 days. Discovery now lists `refresh_token` under `grant_types_supported`

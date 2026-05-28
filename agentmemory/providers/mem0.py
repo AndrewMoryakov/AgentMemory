@@ -518,6 +518,42 @@ class Mem0Provider(BaseMemoryProvider):
         # id; surfacing the failure is safer than syncing the wrong record.
         raise ProviderValidationError("Mem0 add succeeded without returning a usable record, and fallback lookup found nothing.")
 
+    def _hydrate_if_needed(self, record: MemoryRecord, *, memory: Memory) -> MemoryRecord:
+        if not self._record_needs_hydration(record):
+            return record
+        rec_id = record.get("id")
+        if not rec_id:
+            return record
+        try:
+            hydrated = self._normalize_one_record(memory.get(rec_id))
+        except Exception:
+            return record
+        if "raw" in record and isinstance(record["raw"], dict):
+            merged_raw = dict(hydrated.get("raw", {}))
+            merged_raw.update(record["raw"])
+            hydrated["raw"] = merged_raw
+        return hydrated
+
+    def _normalize_all_add_records(self, payload: Any, *, memory: Memory) -> list[MemoryRecord]:
+        """Return every record present in an add() response, hydrated.
+
+        mem0 with infer=true splits an input into multiple extracted facts —
+        the response then contains several ADD events under "results". Earlier
+        revisions returned only the first; this helper surfaces them all so
+        callers can attach the remainder as additional_records on the primary.
+        """
+        # First try direct normalization (handles list, {"results": [...]}, single dict).
+        direct = self._normalize_records(payload)
+        if not direct:
+            # Fall back to scanning event envelopes — covers responses where
+            # records lack the canonical shape but carry an ADD/UPDATE marker.
+            candidates: list[MemoryRecord] = []
+            for item in self._coerce_mem0_results(payload):
+                if item.get("event") in {"ADD", "UPDATE"} and (item.get("id") or item.get("memory_id")):
+                    candidates.append(self._normalize_record(item))
+            direct = candidates
+        return [self._hydrate_if_needed(record, memory=memory) for record in direct if record.get("id")]
+
     def _normalize_add_result(
         self,
         payload: Any,
@@ -530,56 +566,33 @@ class Mem0Provider(BaseMemoryProvider):
         metadata=None,
         memory_type=None,
     ) -> MemoryRecord:
-        try:
-            record = self._normalize_one_record(payload)
-        except ProviderValidationError:
-            results = self._coerce_mem0_results(payload)
-            if results:
-                for item in results:
-                    if item.get("event") in {"ADD", "UPDATE"} and (item.get("id") or item.get("memory_id")):
-                        record = self._normalize_record(item)
-                        if self._record_needs_hydration(record):
-                            try:
-                                hydrated = self._normalize_one_record(memory.get(record["id"]))
-                                if "raw" in record and isinstance(record["raw"], dict):
-                                    merged_raw = dict(hydrated.get("raw", {}))
-                                    merged_raw.update(record["raw"])
-                                    hydrated["raw"] = merged_raw
-                                return hydrated
-                            except Exception:
-                                return record
-                        return record
-            # mem0 sometimes wraps the saved id in a non-record envelope (e.g.
-            # an empty results list alongside raw_saved_record_id). Surface that
-            # id to the fallback so it can fetch / attribute the exact write.
-            added_id = None
-            if isinstance(payload, dict):
-                for key in ("raw_saved_record_id", "memory_id", "id"):
-                    candidate = payload.get(key)
-                    if isinstance(candidate, str) and candidate:
-                        added_id = candidate
-                        break
-            return self._fallback_added_record(
-                memory=memory,
-                added_id=added_id,
-                added_text=added_text,
-                user_id=user_id,
-                agent_id=agent_id,
-                run_id=run_id,
-                metadata=metadata,
-                memory_type=memory_type,
-            )
-        if self._record_needs_hydration(record):
-            try:
-                hydrated = self._normalize_one_record(memory.get(record["id"]))
-                if "raw" in record and isinstance(record["raw"], dict):
-                    merged_raw = dict(hydrated.get("raw", {}))
-                    merged_raw.update(record["raw"])
-                    hydrated["raw"] = merged_raw
-                return hydrated
-            except Exception:
-                return record
-        return record
+        records = self._normalize_all_add_records(payload, memory=memory)
+        if records:
+            primary = dict(records[0])
+            if len(records) > 1:
+                primary["additional_records"] = list(records[1:])
+            return primary
+
+        # mem0 sometimes wraps the saved id in a non-record envelope (e.g.
+        # an empty results list alongside raw_saved_record_id). Surface that
+        # id to the fallback so it can fetch / attribute the exact write.
+        added_id = None
+        if isinstance(payload, dict):
+            for key in ("raw_saved_record_id", "memory_id", "id"):
+                candidate = payload.get(key)
+                if isinstance(candidate, str) and candidate:
+                    added_id = candidate
+                    break
+        return self._fallback_added_record(
+            memory=memory,
+            added_id=added_id,
+            added_text=added_text,
+            user_id=user_id,
+            agent_id=agent_id,
+            run_id=run_id,
+            metadata=metadata,
+            memory_type=memory_type,
+        )
 
     def _normalize_delete_result(self, payload: Any, *, memory_id: str) -> DeleteResult:
         if not isinstance(payload, dict):
@@ -804,7 +817,12 @@ class Mem0Provider(BaseMemoryProvider):
                 metadata=metadata,
                 memory_type=memory_type,
             )
+        # Sync every produced record to the scope registry, not just the
+        # primary — otherwise fan-out writes from infer=true become invisible
+        # to list_scopes and the TTL sweeper.
         self._sync_scope_registry_upsert(operation="add", record=record)
+        for extra in record.get("additional_records") or []:
+            self._sync_scope_registry_upsert(operation="add", record=extra)
         return record
 
     def search_memory(self, *, query, user_id=None, agent_id=None, run_id=None, limit=10, filters=None, threshold=None, rerank=True) -> list[MemoryRecord]:

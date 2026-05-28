@@ -93,6 +93,12 @@ class MemoryRecord(TypedDict, total=False):
     provider: str
     score: float
     raw: dict[str, Any] | list[Any] | str | None
+    # Populated only by add operations when the provider produced more than
+    # one record from a single call — e.g. mem0 with infer=true can split an
+    # input into multiple extracted facts. Each entry is a full MemoryRecord
+    # for the additional writes; the outer record is the primary. Absent on
+    # single-record adds and on all read operations.
+    additional_records: list["MemoryRecord"]
 
 
 class DeleteResult(TypedDict):

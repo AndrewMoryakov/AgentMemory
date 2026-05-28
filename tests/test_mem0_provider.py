@@ -179,6 +179,37 @@ class FakeMem0MinimalAddWrapperBackend(FakeMem0Backend):
         return {"results": [{"id": record["id"], "memory": record["text"], "event": "ADD"}]}
 
 
+class FakeMem0FanoutAddBackend(FakeMem0Backend):
+    """Simulates mem0 with infer=true splitting one input into three extracted
+    facts — each becomes its own ADD event in the results envelope."""
+
+    def add(self, messages, *, user_id=None, agent_id=None, run_id=None, metadata=None, infer=True, memory_type=None):
+        self._require_scope(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        now = utc_now()
+        facts = [
+            "First extracted fact",
+            "Second extracted fact",
+            "Third extracted fact",
+        ]
+        results = []
+        for text in facts:
+            record = {
+                "id": str(uuid4()),
+                "text": text,
+                "metadata": dict(metadata or {}),
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "run_id": run_id,
+                "memory_type": memory_type,
+                "created_at": now,
+                "updated_at": now,
+                "category": "fake-mem0",
+            }
+            self._records.append(record)
+            results.append({"id": record["id"], "memory": record["text"], "event": "ADD"})
+        return {"results": results}
+
+
 class FakeMem0PartialScopeAddBackend(FakeMem0Backend):
     def add(self, messages, *, user_id=None, agent_id=None, run_id=None, metadata=None, infer=True, memory_type=None):
         record = super().add(
@@ -253,6 +284,12 @@ class SemanticMem0Provider(HarnessMem0Provider):
     def __init__(self, *, runtime_config: dict[str, object], provider_config: dict[str, object]) -> None:
         Mem0Provider.__init__(self, runtime_config=runtime_config, provider_config=provider_config)
         self._fake_memory = FakeMem0SemanticBackend()
+
+
+class FanoutAddMem0Provider(HarnessMem0Provider):
+    def __init__(self, *, runtime_config: dict[str, object], provider_config: dict[str, object]) -> None:
+        Mem0Provider.__init__(self, runtime_config=runtime_config, provider_config=provider_config)
+        self._fake_memory = FakeMem0FanoutAddBackend()
 
 
 class PartialScopeAddMem0Provider(HarnessMem0Provider):
@@ -407,6 +444,46 @@ class Mem0ProviderHarnessTests(ProviderContractHarness, unittest.TestCase):
 
         self.assertTrue(deleted["deleted"])
         self.assertEqual(deleted["id"], created["id"])
+
+    def test_add_surfaces_fanout_records_and_syncs_each_to_scope_registry(self) -> None:
+        provider = FanoutAddMem0Provider(
+            runtime_config={"runtime_dir": self.temp_dir.name},
+            provider_config=Mem0Provider.default_provider_config(runtime_dir=self.temp_dir.name),
+        )
+
+        created = provider.add_memory(
+            messages=[{"role": "user", "content": "a paragraph that mem0 splits into three facts"}],
+            user_id="default",
+        )
+
+        # The returned record is the first fan-out result; the remainder are
+        # exposed verbatim under additional_records so the caller can see them.
+        self.assertEqual(created["memory"], "First extracted fact")
+        additional = created.get("additional_records")
+        self.assertIsInstance(additional, list)
+        self.assertEqual(len(additional), 2)
+        self.assertEqual([r["memory"] for r in additional], ["Second extracted fact", "Third extracted fact"])
+        all_ids = {created["id"], *(r["id"] for r in additional)}
+        self.assertEqual(len(all_ids), 3, "every fan-out record must carry its own id")
+
+        # Every produced id must reach the scope registry — list_scopes must
+        # see all three rather than just the primary.
+        inventory = provider.list_scopes()
+        users_entry = next((item for item in inventory["items"] if item["kind"] == "user" and item["value"] == "default"), None)
+        self.assertIsNotNone(users_entry)
+        self.assertEqual(users_entry["count"], 3)
+
+    def test_add_omits_additional_records_when_only_one_returned(self) -> None:
+        # Confirms we don't add the field when mem0 produces a single ADD —
+        # callers can rely on its presence as a real signal.
+        provider = HarnessMem0Provider(
+            runtime_config={"runtime_dir": self.temp_dir.name},
+            provider_config=Mem0Provider.default_provider_config(runtime_dir=self.temp_dir.name),
+        )
+
+        created = provider.add_memory(messages=[{"role": "user", "content": "one fact"}], user_id="default")
+
+        self.assertNotIn("additional_records", created)
 
     def test_partial_add_result_skips_registry_and_marks_needs_rebuild(self) -> None:
         provider = PartialScopeAddMem0Provider(
