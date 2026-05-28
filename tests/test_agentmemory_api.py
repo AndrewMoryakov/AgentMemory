@@ -324,17 +324,27 @@ class AgentMemoryApiTests(unittest.TestCase):
         captured_first: list[tuple[int, object, dict[str, str]]] = []
         captured_second: list[tuple[int, object, dict[str, str]]] = []
 
+        issued_pair = {
+            "access_token": "issued-token",
+            "refresh_token": "issued-refresh",
+            "access_expires_in": 3600,
+            "refresh_expires_in": 86400,
+            "scope": "mcp",
+        }
         with (
             mock.patch.object(agentmemory_api.oauth_state, "verify_client_secret", return_value=True),
             mock.patch.object(agentmemory_api.oauth_state, "consume_auth_code", return_value={"scope": "mcp"}),
-            mock.patch.object(agentmemory_api.oauth_state, "issue_access_token", return_value=("issued-token", 3600)),
+            mock.patch.object(agentmemory_api.oauth_state, "issue_token_pair", return_value=issued_pair),
         ):
             first._send = lambda status, payload, headers=None: captured_first.append((status, payload, headers or {}))  # type: ignore[assignment]
             second._send = lambda status, payload, headers=None: captured_second.append((status, payload, headers or {}))  # type: ignore[assignment]
             first.do_POST()
             second.do_POST()
 
-        self.assertEqual(captured_first, [(200, {"access_token": "issued-token", "token_type": "Bearer", "expires_in": 3600, "scope": "mcp"}, {})])
+        self.assertEqual(captured_first[0][0], 200)
+        self.assertEqual(captured_first[0][1]["access_token"], "issued-token")
+        self.assertEqual(captured_first[0][1]["refresh_token"], "issued-refresh")
+        self.assertEqual(captured_first[0][1]["token_type"], "Bearer")
         self.assertEqual(captured_second[0][0], 429)
         self.assertEqual(captured_second[0][1]["error_type"], "RateLimitExceeded")
         self.assertEqual(captured_second[0][2]["Retry-After"], "60")

@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 AUTH_CODE_TTL_SECONDS = 600
 ACCESS_TOKEN_TTL_SECONDS = 7 * 24 * 3600
+REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 3600
 
 # Defensive upper bound to keep the on-disk registry small in case /register
 # is hammered. Old registrations are evicted FIFO once the cap is hit.
@@ -31,6 +32,7 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _LOCK = Lock()
 _AUTH_CODES: dict[str, dict[str, Any]] = {}
 _ACCESS_TOKENS: dict[str, dict[str, Any]] = {}
+_REFRESH_TOKENS: dict[str, dict[str, Any]] = {}
 _TOKENS_LOADED = False
 
 _STORE_LOCK = Lock()
@@ -214,19 +216,25 @@ def _token_store_path() -> Path:
     return Path(RUNTIME_DIR) / TOKEN_STORE_FILENAME
 
 
-def _load_token_store_from_disk() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+def _load_token_store_from_disk() -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+]:
     path = _token_store_path()
     if not path.exists():
-        return {}, {}
+        return {}, {}, {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}, {}
+        return {}, {}, {}
     if not isinstance(payload, dict):
-        return {}, {}
+        return {}, {}, {}
     auth_codes = payload.get("auth_codes") if isinstance(payload.get("auth_codes"), dict) else {}
     access_tokens = payload.get("access_tokens") if isinstance(payload.get("access_tokens"), dict) else {}
-    return dict(auth_codes), dict(access_tokens)
+    # refresh_tokens key absent on stores written before refresh-token support
+    refresh_tokens = payload.get("refresh_tokens") if isinstance(payload.get("refresh_tokens"), dict) else {}
+    return dict(auth_codes), dict(access_tokens), dict(refresh_tokens)
 
 
 def _save_token_store() -> None:
@@ -241,6 +249,7 @@ def _save_token_store() -> None:
             "version": TOKEN_STORE_VERSION,
             "auth_codes": _AUTH_CODES,
             "access_tokens": _ACCESS_TOKENS,
+            "refresh_tokens": _REFRESH_TOKENS,
         },
         ensure_ascii=True,
         encoding="utf-8",
@@ -254,9 +263,10 @@ def _ensure_tokens_loaded() -> None:
     global _TOKENS_LOADED
     if _TOKENS_LOADED:
         return
-    auth_codes, access_tokens = _load_token_store_from_disk()
+    auth_codes, access_tokens, refresh_tokens = _load_token_store_from_disk()
     _AUTH_CODES.update(auth_codes)
     _ACCESS_TOKENS.update(access_tokens)
+    _REFRESH_TOKENS.update(refresh_tokens)
     _TOKENS_LOADED = True
 
 
@@ -265,7 +275,7 @@ def _purge_expired() -> bool:
     Caller must hold _LOCK."""
     now = _now()
     removed = False
-    for store in (_AUTH_CODES, _ACCESS_TOKENS):
+    for store in (_AUTH_CODES, _ACCESS_TOKENS, _REFRESH_TOKENS):
         for key in list(store.keys()):
             if store[key]["expires_at"] <= now:
                 store.pop(key, None)
@@ -336,6 +346,9 @@ def _verify_pkce(challenge: str, method: str, verifier: str) -> bool:
 
 
 def issue_access_token(*, client_id: str, scope: str | None = None) -> tuple[str, int]:
+    """Issue an access token only. Prefer issue_token_pair for new callers
+    so the client also gets a refresh token. Retained for any external
+    integration that does not want refresh semantics."""
     token = secrets.token_urlsafe(32)
     with _LOCK:
         _ensure_tokens_loaded()
@@ -346,6 +359,83 @@ def issue_access_token(*, client_id: str, scope: str | None = None) -> tuple[str
         }
         _save_token_store()
     return token, ACCESS_TOKEN_TTL_SECONDS
+
+
+def issue_token_pair(*, client_id: str, scope: str | None = None) -> dict[str, Any]:
+    """Issue an access + refresh token pair bound to client_id.
+
+    Returns a dict with access_token, refresh_token, access_expires_in,
+    refresh_expires_in, scope. Caller is responsible for shaping the
+    final HTTP response body."""
+    access = secrets.token_urlsafe(32)
+    refresh = secrets.token_urlsafe(40)
+    now = _now()
+    with _LOCK:
+        _ensure_tokens_loaded()
+        _ACCESS_TOKENS[access] = {
+            "client_id": client_id,
+            "scope": scope,
+            "expires_at": now + ACCESS_TOKEN_TTL_SECONDS,
+        }
+        _REFRESH_TOKENS[refresh] = {
+            "client_id": client_id,
+            "scope": scope,
+            "expires_at": now + REFRESH_TOKEN_TTL_SECONDS,
+        }
+        _save_token_store()
+    return {
+        "access_token": access,
+        "refresh_token": refresh,
+        "access_expires_in": ACCESS_TOKEN_TTL_SECONDS,
+        "refresh_expires_in": REFRESH_TOKEN_TTL_SECONDS,
+        "scope": scope,
+    }
+
+
+def consume_refresh_token(*, refresh_token: str, client_id: str) -> dict[str, Any] | None:
+    """Validate and rotate a refresh token. Returns a fresh access+refresh
+    pair on success, or None if the token is unknown / expired / bound to
+    a different client. Old refresh token is invalidated on use per
+    OAuth 2.1 rotation guidance."""
+    if not refresh_token or not client_id:
+        return None
+    with _LOCK:
+        _ensure_tokens_loaded()
+        _purge_expired()
+        entry = _REFRESH_TOKENS.pop(refresh_token, None)
+        if entry is None:
+            return None
+        if entry.get("client_id") != client_id:
+            # Token belongs to a different client — refuse and reinsert
+            # so the legitimate owner can still use it. (Misbinding here
+            # likely means an attacker probing with a stolen token; we
+            # don't reveal which case it is.)
+            _REFRESH_TOKENS[refresh_token] = entry
+            return None
+        scope = entry.get("scope")
+        # Rotate: mint a brand new pair (issue_token_pair would re-acquire
+        # the lock, so inline the mint with the lock already held).
+        access = secrets.token_urlsafe(32)
+        new_refresh = secrets.token_urlsafe(40)
+        now = _now()
+        _ACCESS_TOKENS[access] = {
+            "client_id": client_id,
+            "scope": scope,
+            "expires_at": now + ACCESS_TOKEN_TTL_SECONDS,
+        }
+        _REFRESH_TOKENS[new_refresh] = {
+            "client_id": client_id,
+            "scope": scope,
+            "expires_at": now + REFRESH_TOKEN_TTL_SECONDS,
+        }
+        _save_token_store()
+    return {
+        "access_token": access,
+        "refresh_token": new_refresh,
+        "access_expires_in": ACCESS_TOKEN_TTL_SECONDS,
+        "refresh_expires_in": REFRESH_TOKEN_TTL_SECONDS,
+        "scope": scope,
+    }
 
 
 def validate_access_token(token: str) -> bool:
@@ -483,6 +573,7 @@ def reset_client_registry_for_tests() -> None:
     with _LOCK:
         _AUTH_CODES.clear()
         _ACCESS_TOKENS.clear()
+        _REFRESH_TOKENS.clear()
         _TOKENS_LOADED = False
 
 
@@ -493,4 +584,5 @@ def _reload_token_store_for_tests() -> None:
     with _LOCK:
         _AUTH_CODES.clear()
         _ACCESS_TOKENS.clear()
+        _REFRESH_TOKENS.clear()
         _TOKENS_LOADED = False

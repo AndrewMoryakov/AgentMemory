@@ -308,7 +308,7 @@ class Handler(BaseHTTPRequestHandler):
             "authorization_endpoint": f"{base}/oauth/authorize",
             "token_endpoint": f"{base}/oauth/token",
             "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
             "scopes_supported": ["mcp"],
@@ -479,29 +479,45 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         grant_type = _f("grant_type")
-        if grant_type != "authorization_code":
-            self._send(400, {"error": "unsupported_grant_type"})
+        if grant_type == "authorization_code":
+            entry = oauth_state.consume_auth_code(
+                code=_f("code"),
+                client_id=given_client_id,
+                redirect_uri=_f("redirect_uri"),
+                code_verifier=_f("code_verifier"),
+            )
+            if entry is None:
+                self._send(400, {"error": "invalid_grant"})
+                return
+            issued = oauth_state.issue_token_pair(client_id=given_client_id, scope=entry.get("scope"))
+            self._send(200, self._token_response_body(issued))
             return
 
-        entry = oauth_state.consume_auth_code(
-            code=_f("code"),
-            client_id=given_client_id,
-            redirect_uri=_f("redirect_uri"),
-            code_verifier=_f("code_verifier"),
-        )
-        if entry is None:
-            self._send(400, {"error": "invalid_grant"})
+        if grant_type == "refresh_token":
+            issued = oauth_state.consume_refresh_token(
+                refresh_token=_f("refresh_token"),
+                client_id=given_client_id,
+            )
+            if issued is None:
+                self._send(400, {"error": "invalid_grant"})
+                return
+            self._send(200, self._token_response_body(issued))
             return
 
-        token, ttl = oauth_state.issue_access_token(client_id=given_client_id, scope=entry.get("scope"))
-        payload = {
-            "access_token": token,
+        self._send(400, {"error": "unsupported_grant_type"})
+
+    @staticmethod
+    def _token_response_body(issued: dict) -> dict:
+        body = {
+            "access_token": issued["access_token"],
             "token_type": "Bearer",
-            "expires_in": ttl,
+            "expires_in": issued["access_expires_in"],
+            "refresh_token": issued["refresh_token"],
+            "refresh_expires_in": issued["refresh_expires_in"],
         }
-        if entry.get("scope"):
-            payload["scope"] = entry["scope"]
-        self._send(200, payload)
+        if issued.get("scope"):
+            body["scope"] = issued["scope"]
+        return body
 
     def _serve_web_file(self, relative_path: str, content_type: str | None = None) -> bool:
         path = (WEB_DIR / relative_path).resolve()

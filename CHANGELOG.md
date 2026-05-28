@@ -10,6 +10,7 @@ The format is intentionally simple during public alpha.
 
 - OAuth 2.1 Dynamic Client Registration (RFC 7591). Remote MCP clients (Claude.ai, ChatGPT Custom Connectors) can now self-register against `POST /register`; discovery at `/.well-known/oauth-authorization-server` advertises `registration_endpoint`. Registered clients persist to `{runtime_dir}/oauth_clients.json` with SHA-256 hashed secrets, FIFO eviction at 10 000 entries
 - Persistent OAuth token store at `{runtime_dir}/oauth_tokens.json`. Authorization codes and access tokens now survive container restarts — remote MCP clients no longer get silently logged out on redeploy
+- OAuth refresh tokens (RFC 6749 §6). `POST /oauth/token` accepts `grant_type=refresh_token` and returns a new access+refresh pair; the old refresh token is invalidated on use (rotation, per OAuth 2.1 security BCP). Refresh-token TTL is 30 days; access-token TTL stays at 7 days. Discovery now lists `refresh_token` under `grant_types_supported`
 - `AGENTMEMORY_OAUTH_DISABLE_DCR` to opt out of dynamic registration (clients must then be pre-shared via `AGENTMEMORY_OAUTH_CLIENT_ID`/`SECRET`)
 - `AGENTMEMORY_REGISTER_RATE_LIMIT_PER_HOUR` (default 20) per-IP cap on registrations
 - `AGENTMEMORY_OAUTH_STORE` and `AGENTMEMORY_OAUTH_TOKEN_STORE` to override the registry/token JSON paths (mostly for tests)

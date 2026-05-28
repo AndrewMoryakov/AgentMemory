@@ -274,6 +274,7 @@ class OAuthDcrTests(unittest.TestCase):
         self.assertEqual(token_captured[0][0], 200, token_captured)
         token_payload = token_captured[0][1]
         self.assertIn("access_token", token_payload)
+        self.assertIn("refresh_token", token_payload)
         self.assertEqual(token_payload["token_type"], "Bearer")
         self.assertEqual(token_payload["scope"], "mcp")
         self.assertTrue(oauth_state.validate_access_token(token_payload["access_token"]))
@@ -331,6 +332,103 @@ class OAuthDcrTests(unittest.TestCase):
 
         self.assertEqual(captured[0][0], 401)
         self.assertEqual(captured[0][1]["error"], "invalid_client")
+
+    # ---------- refresh tokens ----------
+
+    def _refresh_post(self, *, refresh_token: str, client_id: str, client_secret: str):
+        form = urllib.parse.urlencode({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }).encode("utf-8")
+        handler = _make_handler(path="/oauth/token", body=form)
+        captured: list = []
+        handler._send = lambda status, payload, headers=None: captured.append((status, payload))
+        handler.do_POST()
+        return captured[0]
+
+    def test_refresh_token_returns_fresh_pair_and_rotates(self) -> None:
+        client = self._register_client("https://x.example/cb")
+        first = oauth_state.issue_token_pair(client_id=client["client_id"], scope="mcp")
+
+        status, body = self._refresh_post(
+            refresh_token=first["refresh_token"],
+            client_id=client["client_id"],
+            client_secret=client["client_secret"],
+        )
+
+        self.assertEqual(status, 200, body)
+        self.assertIn("access_token", body)
+        self.assertIn("refresh_token", body)
+        self.assertNotEqual(body["access_token"], first["access_token"])
+        self.assertNotEqual(body["refresh_token"], first["refresh_token"])
+        self.assertEqual(body["scope"], "mcp")
+        self.assertTrue(oauth_state.validate_access_token(body["access_token"]))
+
+        # Old refresh token must no longer work — replay returns 400
+        status2, body2 = self._refresh_post(
+            refresh_token=first["refresh_token"],
+            client_id=client["client_id"],
+            client_secret=client["client_secret"],
+        )
+        self.assertEqual(status2, 400)
+        self.assertEqual(body2["error"], "invalid_grant")
+
+    def test_refresh_token_rejects_wrong_client_secret(self) -> None:
+        client = self._register_client("https://x.example/cb")
+        pair = oauth_state.issue_token_pair(client_id=client["client_id"])
+
+        status, body = self._refresh_post(
+            refresh_token=pair["refresh_token"],
+            client_id=client["client_id"],
+            client_secret="wrong-secret",
+        )
+
+        self.assertEqual(status, 401)
+        self.assertEqual(body["error"], "invalid_client")
+        # Refresh token must NOT be consumed when client auth fails
+        self.assertIn(pair["refresh_token"], oauth_state._REFRESH_TOKENS)
+
+    def test_refresh_token_rejects_cross_client_replay(self) -> None:
+        client_a = self._register_client("https://a.example/cb")
+        client_b = self._register_client("https://b.example/cb")
+        pair = oauth_state.issue_token_pair(client_id=client_a["client_id"])
+
+        status, body = self._refresh_post(
+            refresh_token=pair["refresh_token"],
+            client_id=client_b["client_id"],
+            client_secret=client_b["client_secret"],
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "invalid_grant")
+        # Legitimate owner can still use the token
+        self.assertIn(pair["refresh_token"], oauth_state._REFRESH_TOKENS)
+
+    def test_refresh_token_expired_rejected(self) -> None:
+        client = self._register_client("https://x.example/cb")
+        pair = oauth_state.issue_token_pair(client_id=client["client_id"])
+        with oauth_state._LOCK:
+            oauth_state._REFRESH_TOKENS[pair["refresh_token"]]["expires_at"] = 0
+
+        status, body = self._refresh_post(
+            refresh_token=pair["refresh_token"],
+            client_id=client["client_id"],
+            client_secret=client["client_secret"],
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "invalid_grant")
+
+    def test_discovery_advertises_refresh_token_grant(self) -> None:
+        handler = _make_handler(path="/.well-known/oauth-authorization-server", method="GET")
+        captured: list = []
+        handler._send = lambda status, payload, headers=None: captured.append((status, payload))
+
+        handler._handle_oauth_metadata()
+
+        self.assertIn("refresh_token", captured[0][1]["grant_types_supported"])
 
     # ---------- token persistence ----------
 
