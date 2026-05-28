@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -101,15 +102,41 @@ def _write_status_document(runtime_dir: str, payload: dict[str, Any]) -> None:
     atomic_write_json(status_path(runtime_dir), payload)
 
 
+def _enable_wal(connection: sqlite3.Connection) -> None:
+    """Enable WAL journal mode, retrying briefly on contention.
+
+    SQLite's `PRAGMA journal_mode=WAL` transitions the journal state and
+    needs an exclusive lock to do so. Unlike normal queries that respect
+    busy_timeout, this PRAGMA returns SQLITE_BUSY *immediately* if another
+    connection is mid-transition. The race is realistic: API server, CLI,
+    and provider sidecars all sync on every op, and one of them may be
+    creating the DB the moment another shows up. After a brief backoff
+    we either succeed (the contending writer finished) or we accept the
+    default journal mode — the registry still works, just with coarser
+    concurrency.
+    """
+    last_exc: sqlite3.OperationalError | None = None
+    for attempt in range(5):
+        try:
+            connection.execute("PRAGMA journal_mode=WAL").fetchone()
+            return
+        except sqlite3.OperationalError as exc:
+            last_exc = exc
+            if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    _logger.warning("scope_registry: could not enable WAL after retries: %s", last_exc)
+
+
 @contextlib.contextmanager
 def _connect(runtime_dir: str) -> Iterator[sqlite3.Connection]:
     path = registry_path(runtime_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10.0)
-    # Enable WAL so readers and writers don't block each other across the
-    # multiple processes (CLI + API server + providers) that sync on every op.
-    # journal_mode returns a row, so consume it; WAL is persisted per-DB once set.
-    connection.execute("PRAGMA journal_mode=WAL").fetchone()
+    # WAL: readers and writers don't block each other across the multiple
+    # processes (CLI + API server + providers) that sync on every op.
+    # Retry the transition to handle the initial-create race.
+    _enable_wal(connection)
     connection.execute("PRAGMA busy_timeout=5000")
     # NORMAL is durable and safe under WAL while avoiding fsync-per-commit stalls.
     connection.execute("PRAGMA synchronous=NORMAL")

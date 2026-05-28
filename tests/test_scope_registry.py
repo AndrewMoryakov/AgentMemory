@@ -270,19 +270,38 @@ class ScopeRegistryTests(unittest.TestCase):
         self.assertEqual(mode.lower(), "wal")
 
     def test_concurrent_upserts_preserve_all_records(self) -> None:
+        # Seed the DB once in the parent so the WAL journal-mode transition
+        # has already happened by the time workers connect. Without this,
+        # four parallel children all try to flip journal_mode=WAL at the
+        # same instant and one of them loses the lock race — SQLite's
+        # PRAGMA journal_mode is the one operation that does NOT respect
+        # busy_timeout. The _enable_wal retry in scope_registry handles
+        # that on its own now, but pre-seeding here removes ambiguity
+        # from the test (we want to assert concurrent upserts, not the
+        # one-time WAL transition).
+        scope_registry.upsert_record(
+            "localjson",
+            {"id": "seed", "memory": "seed", "provider": "localjson", "user_id": "seed-user"},
+            self.runtime_dir,
+        )
+        # Use the "spawn" start method: Python 3.13 warns about fork() in a
+        # multi-threaded parent (background telemetry threads pulled in by
+        # mem0/posthog), and spawn gives each worker a clean interpreter.
+        ctx = multiprocessing.get_context("spawn")
         processes = [
-            multiprocessing.Process(target=_worker_upsert, args=(self.runtime_dir, "localjson", index))
+            ctx.Process(target=_worker_upsert, args=(self.runtime_dir, "localjson", index))
             for index in range(4)
         ]
 
         for process in processes:
             process.start()
         for process in processes:
-            process.join(10)
+            process.join(30)
 
         for process in processes:
             self.assertEqual(process.exitcode, 0)
 
         inventory = scope_registry.list_inventory("localjson", 10, None, None, self.runtime_dir)
 
-        self.assertEqual(inventory["totals"], {"users": 4, "agents": 0, "runs": 0})
+        # Four workers + one seed write.
+        self.assertEqual(inventory["totals"], {"users": 5, "agents": 0, "runs": 0})
