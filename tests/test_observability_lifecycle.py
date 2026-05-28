@@ -134,6 +134,46 @@ class LifecycleTTLTests(unittest.TestCase):
         cleaned = lifecycle_module.apply_expiry_to_metadata(metadata)
         self.assertEqual(cleaned, {"marker": "x"})
 
+    def test_resolve_expires_at_rejects_garbage_ttl_seconds(self) -> None:
+        from agentmemory.providers.base import ProviderValidationError
+
+        bad_values: list = ["not-a-number", "60s", {"complex": "obj"}, [60], True, False, -10, 0, 0.0]
+        for bad in bad_values:
+            with self.subTest(ttl_seconds=bad):
+                with self.assertRaises(ProviderValidationError):
+                    lifecycle_module.resolve_expires_at({"ttl_seconds": bad})
+
+    def test_resolve_expires_at_rejects_garbage_expires_at(self) -> None:
+        from agentmemory.providers.base import ProviderValidationError
+
+        for bad in ["not-a-date", "2026-13-99", {"k": "v"}, [123]]:
+            with self.subTest(expires_at=bad):
+                with self.assertRaises(ProviderValidationError):
+                    lifecycle_module.resolve_expires_at({"expires_at": bad})
+
+    def test_resolve_expires_at_accepts_explicit_none_and_empty_string(self) -> None:
+        # Caller passing null/empty is the JSON idiom for "no value". Must
+        # NOT raise — that would force every client to omit the key entirely.
+        for absent in (None, ""):
+            with self.subTest(value=absent):
+                self.assertIsNone(lifecycle_module.resolve_expires_at({"ttl_seconds": absent}))
+                self.assertIsNone(lifecycle_module.resolve_expires_at({"expires_at": absent}))
+
+    def test_resolve_expires_at_valid_expires_at_wins_over_bogus_ttl(self) -> None:
+        # If expires_at is set and parseable, ttl_seconds isn't consulted —
+        # so a bogus ttl_seconds next to a valid expires_at must not raise.
+        resolved = lifecycle_module.resolve_expires_at(
+            {"expires_at": "2030-01-01T00:00:00Z", "ttl_seconds": "garbage"}
+        )
+        self.assertIsNotNone(resolved)
+        self.assertTrue(resolved.startswith("2030-01-01"))
+
+    def test_apply_expiry_to_metadata_propagates_validation_errors(self) -> None:
+        from agentmemory.providers.base import ProviderValidationError
+
+        with self.assertRaises(ProviderValidationError):
+            lifecycle_module.apply_expiry_to_metadata({"ttl_seconds": "60s"})
+
     def test_is_expired_past_and_future(self) -> None:
         now = lifecycle_module.utc_now()
         past = {"metadata": {"expires_at": (now - timedelta(seconds=1)).isoformat()}}

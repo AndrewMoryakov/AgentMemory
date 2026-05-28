@@ -6,8 +6,9 @@ value is either provided directly by the caller or computed from a
 background sweeper in api.main() hard-deletes them so the vector store
 doesn't grow unboundedly.
 
-Everything here is pure — no imports from runtime.operations or providers
-— so it can be composed without circular-import headaches.
+This module is composition-light by design: it only imports ProviderError
+types from providers.base (a leaf module) so callers can wire it into the
+add path without dragging in runtime.operations or full provider classes.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
+
+from agentmemory.providers.base import ProviderValidationError
 
 
 EXPIRES_AT_KEY = "expires_at"
@@ -54,18 +57,49 @@ def _parse_expires_at(value: Any) -> datetime | None:
 def resolve_expires_at(metadata: dict[str, Any] | None) -> str | None:
     """Compute the stored ISO expires_at from the caller's metadata.
 
-    - If metadata.expires_at is present, it's normalized to a UTC ISO string.
-    - If metadata.ttl_seconds is present and positive, expires_at is derived.
-    - Explicit expires_at wins over ttl_seconds if both are given.
+    - If metadata.expires_at is present (non-null), it must be parseable as
+      ISO 8601 / datetime / unix seconds; otherwise raise. Wins over
+      ttl_seconds when both are set.
+    - If metadata.ttl_seconds is present (non-null), it must be a positive
+      number (not a bool, not a string, not zero/negative); otherwise raise.
+    - Absent keys (or explicit None / "") mean "no expiry" — pass through.
+
+    The strict-on-garbage stance exists so a typoed value never silently
+    drops to "no TTL"; a caller who set ttl_seconds=\"60\" expects 60s
+    expiry, not unlimited persistence.
     """
     if not isinstance(metadata, dict):
         return None
-    direct = _parse_expires_at(metadata.get(EXPIRES_AT_KEY))
-    if direct is not None:
-        return direct.isoformat()
-    ttl = metadata.get(TTL_SECONDS_KEY)
-    if isinstance(ttl, (int, float)) and ttl > 0:
-        return (utc_now() + timedelta(seconds=float(ttl))).isoformat()
+
+    if EXPIRES_AT_KEY in metadata:
+        raw_expires_at = metadata[EXPIRES_AT_KEY]
+        if raw_expires_at not in (None, ""):
+            parsed = _parse_expires_at(raw_expires_at)
+            if parsed is None:
+                raise ProviderValidationError(
+                    f"metadata.{EXPIRES_AT_KEY} must be an ISO 8601 timestamp, "
+                    f"datetime, or unix epoch seconds — got "
+                    f"{type(raw_expires_at).__name__} {raw_expires_at!r}"
+                )
+            return parsed.isoformat()
+
+    if TTL_SECONDS_KEY in metadata:
+        ttl = metadata[TTL_SECONDS_KEY]
+        if ttl not in (None, ""):
+            # bool is a subclass of int — accepting it would turn
+            # ttl_seconds=true into "1 second", which is never what the
+            # caller meant. Reject explicitly.
+            if isinstance(ttl, bool) or not isinstance(ttl, (int, float)):
+                raise ProviderValidationError(
+                    f"metadata.{TTL_SECONDS_KEY} must be a positive number of "
+                    f"seconds — got {type(ttl).__name__} {ttl!r}"
+                )
+            if ttl <= 0:
+                raise ProviderValidationError(
+                    f"metadata.{TTL_SECONDS_KEY} must be a positive number — got {ttl}"
+                )
+            return (utc_now() + timedelta(seconds=float(ttl))).isoformat()
+
     return None
 
 
@@ -74,14 +108,17 @@ def apply_expiry_to_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] 
 
     This is the canonical shape we persist: downstream readers only have to
     check metadata.expires_at, they don't need to know about ttl_seconds.
+    Raises ProviderValidationError when either key is present but invalid —
+    see resolve_expires_at for the validation rules.
     """
     if not isinstance(metadata, dict):
         return metadata
     expires_iso = resolve_expires_at(metadata)
     if expires_iso is None:
-        # Caller passed nothing expiry-related, or ttl_seconds was non-positive.
-        # Pass the original metadata through untouched except for dropping the
-        # temporary ttl_seconds key if present.
+        # Caller passed nothing expiry-related (both keys absent, or set
+        # to None/""). Pass the original metadata through, but strip the
+        # ttl_seconds key if it was explicitly None so it doesn't leak
+        # into stored metadata.
         if TTL_SECONDS_KEY in metadata:
             cleaned = {k: v for k, v in metadata.items() if k != TTL_SECONDS_KEY}
             return cleaned
