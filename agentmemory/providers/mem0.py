@@ -398,6 +398,30 @@ class Mem0Provider(BaseMemoryProvider):
             raise ProviderValidationError("Mem0 returned an empty or invalid memory payload.")
         return records[0]
 
+    def _is_empty_get_payload(self, payload: Any) -> bool:
+        """True when mem0.get() returned a 'not found' sentinel rather than
+        a real record. Used by get_memory / update_memory to raise
+        MemoryNotFoundError (HTTP 404) instead of leaking the generic
+        ProviderValidationError (HTTP 400) that _normalize_one_record
+        would otherwise produce for the same payload shapes.
+
+        Truly malformed payloads (a dict that *contains* data but is
+        missing required fields) still flow through to _normalize_one_record,
+        which is correct — that's a provider-side data integrity error,
+        not a 'not found'."""
+        if payload is None:
+            return True
+        if isinstance(payload, dict):
+            if not payload:
+                return True
+            results = payload.get("results")
+            if isinstance(results, list) and not results:
+                return True
+            return False
+        if isinstance(payload, list) and not payload:
+            return True
+        return False
+
     def _coerce_mem0_results(self, payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, list):
             return [item for item in payload if isinstance(item, dict)]
@@ -866,6 +890,8 @@ class Mem0Provider(BaseMemoryProvider):
                 payload = self._load_memory().get(memory_id)
             except Exception as exc:
                 raise self._map_exception(exc) from exc
+            if self._is_empty_get_payload(payload):
+                raise MemoryNotFoundError(str(memory_id))
             return self._normalize_one_record(payload)
 
     def update_memory(self, *, memory_id, data, metadata=None) -> MemoryRecord:
@@ -877,9 +903,12 @@ class Mem0Provider(BaseMemoryProvider):
                 raise self._map_exception(exc) from exc
             if self._looks_like_success_message(payload, verb="update"):
                 try:
-                    record = self._normalize_one_record(memory.get(memory_id))
+                    followup = memory.get(memory_id)
                 except Exception as exc:
                     raise self._map_exception(exc) from exc
+                if self._is_empty_get_payload(followup):
+                    raise MemoryNotFoundError(str(memory_id))
+                record = self._normalize_one_record(followup)
             else:
                 record = self._normalize_one_record(payload)
         self._sync_scope_registry_upsert(operation="update", record=record)

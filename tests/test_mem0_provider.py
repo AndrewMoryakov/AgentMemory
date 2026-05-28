@@ -485,6 +485,40 @@ class Mem0ProviderHarnessTests(ProviderContractHarness, unittest.TestCase):
 
         self.assertNotIn("additional_records", created)
 
+    def test_get_memory_raises_not_found_for_each_empty_sentinel(self) -> None:
+        # Real mem0 sometimes returns None / {} / {"results": []} when an id
+        # does not exist instead of raising. Each shape must still surface
+        # as MemoryNotFoundError so HTTP/MCP callers get a 404, never the
+        # generic 400 the old normalize path produced.
+        for sentinel in (None, {}, {"results": []}, []):
+            with self.subTest(sentinel=sentinel):
+                with mock.patch.object(self.provider._fake_memory, "get", return_value=sentinel):
+                    with self.assertRaises(MemoryNotFoundError):
+                        self.provider.get_memory("does-not-exist")
+
+    def test_get_memory_still_surfaces_validation_error_for_malformed_payload(self) -> None:
+        # A non-empty dict that lacks an id is genuinely malformed — that's
+        # a provider-side data integrity error, not a "not found", so it
+        # must keep raising ProviderValidationError, never collapse to 404.
+        with mock.patch.object(self.provider._fake_memory, "get", return_value={"memory": "no id here"}):
+            with self.assertRaises(Exception) as ctx:
+                self.provider.get_memory("any-id")
+        self.assertNotIsInstance(ctx.exception, MemoryNotFoundError)
+
+    def test_update_memory_raises_not_found_when_followup_get_is_empty(self) -> None:
+        # mem0 may answer update() with just "Memory updated successfully!"
+        # In that case the provider re-fetches by id to build the response.
+        # If the re-fetch comes back empty, surface NotFound — not a generic
+        # validation error from _normalize_one_record.
+        provider = MessageResultMem0Provider(
+            runtime_config={"runtime_dir": self.temp_dir.name},
+            provider_config=Mem0Provider.default_provider_config(runtime_dir=self.temp_dir.name),
+        )
+        created = provider.add_memory(messages=[{"role": "user", "content": "x"}], user_id="default")
+        with mock.patch.object(provider._fake_memory, "get", return_value=None):
+            with self.assertRaises(MemoryNotFoundError):
+                provider.update_memory(memory_id=created["id"], data="y")
+
     def test_partial_add_result_skips_registry_and_marks_needs_rebuild(self) -> None:
         provider = PartialScopeAddMem0Provider(
             runtime_config={"runtime_dir": self.temp_dir.name},
