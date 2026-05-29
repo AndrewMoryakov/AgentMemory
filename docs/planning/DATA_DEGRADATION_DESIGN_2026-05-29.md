@@ -300,3 +300,11 @@ helping):**
   `c89cc6f`) closes one specific data-loss class; this document
   addresses a different class (slow signal-to-noise erosion rather
   than terminal deletion).
+- The strategic answer to §3.5 ("different provider with native
+  versioning") is now mapped out: see
+  [`MCP_GIT_PROVIDER_DESIGN_2026-05-29.md`](MCP_GIT_PROVIDER_DESIGN_2026-05-29.md)
+  for the landscape analysis of MCP-over-git options and the rationale
+  for adding a document-oriented provider to AgentMemory itself rather
+  than building a separate service. Captured as a strategic direction
+  in [`ROADMAP.md`](ROADMAP.md) under "Provider Direction:
+  Document-Oriented Backends".

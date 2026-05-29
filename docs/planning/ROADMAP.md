@@ -213,6 +213,84 @@ Why this matters:
 
 - a universal memory runtime needs operator-facing clarity, not just provider code paths
 
+## Provider Direction: Document-Oriented Backends
+
+Until now the provider ecosystem has assumed a single shape: vector-store
+backends that retrieve atomic semantic facts (`mem0`, `localjson`,
+`claude_memory`, `mempalace` all follow this pattern). Real-world usage
+on this host has surfaced a second pattern that the runtime does not yet
+serve well — long-form structured documents that need versioning,
+typed cross-references, audit trail, and structural retrieval rather
+than semantic similarity.
+
+The production legal-case pool (`user_id=topazd2 +
+agent_id=family_court_child_residence_alimony_case`, 44 records as of
+2026-05-29) is the clearest example: 44 multi-page analytical chunks of
+the kind a legal team would normally keep as files in folders. The
+existing vector-store providers store them, but the friction observed
+in real use — stale aggregates without expiry signal, string
+cross-references that decay silently, in-text version markers that the
+runtime has no concept of — is documented in
+[`AGENT_FRICTION_2026-05-29.md`](AGENT_FRICTION_2026-05-29.md) and
+[`DATA_DEGRADATION_DESIGN_2026-05-29.md`](DATA_DEGRADATION_DESIGN_2026-05-29.md).
+
+The architectural response is to add a new provider class alongside the
+vector-store providers — one that exposes document semantics natively
+to the agent. The design analysis for what such a provider should look
+like, the existing MCP-over-git options that were considered as
+alternatives, and the recommendation to build it inside AgentMemory
+rather than as a separate service live in
+[`MCP_GIT_PROVIDER_DESIGN_2026-05-29.md`](MCP_GIT_PROVIDER_DESIGN_2026-05-29.md).
+
+### What this adds
+
+- A new `BaseMemoryProvider` subclass — first implementation backed by
+  markdown files in a git repository, with YAML frontmatter for
+  metadata. Other backends fit the same provider shape later
+  (SQLite + FTS5, content-addressable storage, hosted document stores).
+- Document-specific operations: `document_add`, `document_get`,
+  `document_search` (full-text rather than semantic),
+  `document_list`, `document_supersede`, `document_get_versions`.
+- Provider contract extension: capability flags
+  `supports_versioning`, `supports_supersedes`,
+  `supports_typed_references`.
+- Tool descriptions tuned so the same hosted MCP agent picks correctly
+  between `memory_*` and `document_*` tools from the same connector.
+
+### Why this is the right place for it
+
+- The provider boundary already exists and is provider-generic. Adding
+  a document provider follows the same pattern as adding a new
+  vector-store provider — same registration, same certification
+  surface, same testing harness.
+- AgentMemory already runs a hardened Streamable HTTP MCP server with
+  OAuth 2.1 + DCR + refresh tokens, persistent token storage, a
+  two-leg backup chain, Traefik ingress, and CI. Building this as a
+  separate service would duplicate every one of those concerns.
+- From the agent's perspective, no reconfiguration is required: the
+  MCP URL stays the same, the OAuth flow stays the same, and the new
+  tools simply appear in the next `tools/list` response. This is the
+  same provider-substitution transparency that vector-store providers
+  already give the agent today.
+
+### Why this is a real direction, not a feature spike
+
+The two product roles — semantic-fact memory and document store — do
+not collapse into each other. Carrying both inside the runtime is a
+deliberate split, and the document role unlocks use cases the project
+cannot serve today without forcing callers to misuse the fact-store
+providers. The pattern is meant to remain alongside the vector-store
+providers indefinitely, not to replace them.
+
+The first implementation should land before either of the two natural
+follow-ups — a SQLite + FTS5 document backend (programmatic, schema-
+enforcing) and a hosted-document-store backend (Notion / Obsidian
+sync) — because the markdown + git case is the most operationally
+transparent and provides the cleanest reference for what the
+provider contract needs.
+
+---
+
 ## Near-Term Direction
 
 Near-term product work should prioritize:
@@ -221,6 +299,8 @@ Near-term product work should prioritize:
 2. admin surface cleanup and operational consistency
 3. packaging, install, and cross-platform workflow quality
 4. memory console improvements on top of the now-stable runtime core
+5. document-oriented provider as the first non-vector backend (see
+   "Provider Direction: Document-Oriented Backends" above)
 
 ## Product Direction: Memory Console
 
