@@ -178,6 +178,27 @@ the dead-man side, would close most of the silent-failure surface.
 
 ---
 
+## 4a. Carry-over from the 2026-05-28 live review
+
+The four bugs surfaced on 2026-05-28 are closed in code. Three
+design discussions from that same review were missed in the first
+2026-05-29 backlog pass and are now captured:
+
+- **`BACKLOG.md` item 39** — parametrize the dedup similarity
+  threshold (currently hardcoded 0.92).
+- **`BACKLOG.md` item 40** — warn callers when `infer=true` drops
+  meaningful content (compression as the silent twin of the
+  fan-out problem closed by item DEFECT-06).
+- **`BACKLOG.md` item 41** — rename `memory_reconcile` to
+  `memory_find_conflicts` with backward-compatible alias; the
+  current name overlaps with "reconcile registry drift" which is
+  a different operation.
+
+None of these block production use. They are P2-P3 polish that
+makes the runtime less surprising at the boundaries.
+
+---
+
 ## 5. Bottom line
 
 The system is ready for productive use by one person. All critical paths

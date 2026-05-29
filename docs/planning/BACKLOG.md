@@ -14,13 +14,19 @@ Format per entry:
 Current priority index:
 
 - **P1 open:** items 36 (dead-man backup ping), 37 (auth-derived user_id)
-- **P2 open:** item 38 (memory_type filter)
+- **P2 open:** items 38 (memory_type filter), 40 (infer=true content-loss warning)
+- **P3 open:** items 39 (dedup threshold parametrization), 41 (memory_reconcile alias)
 
 Context for the 2026-05-29 additions: see
 [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md), which also
 captures non-repo follow-ups (TRC `redeploy.sh` commit, telepilothub
 outage triage, agent-side metadata conventions) that do not fit this
 backlog's "single PR" scope.
+
+Items 39-41 are design discussions surfaced during the 2026-05-28 live
+review of the four bugs (now closed in code as items DEFECT-06..09 under
+"Closed"). They were missed in the initial 2026-05-29 backlog pass and
+added in a follow-up.
 
 ---
 
@@ -1008,6 +1014,122 @@ backlog's "single PR" scope.
   - `tests/test_provider_contract_v1.py` and the relevant provider
     tests — assert the filter narrows results.
   - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md) §4.
+
+---
+
+## 39. Parametrize the dedup similarity threshold
+
+- **Priority:** P3
+- **Status:** open
+- **Severity:** hygiene
+- **Why:** `memory_add(dedup=true)` returns a pre-existing record when the
+  semantic score against the new input is at least `DEDUP_SCORE_THRESHOLD`
+  (`agentmemory/runtime/operations.py`, currently hardcoded to `0.92`).
+  Live verification on 2026-05-28 showed a clean paraphrase scoring 1.0
+  on identical input but failing to merge a sentence-level paraphrase
+  ("DCR registration endpoint at POST /register, anonymous, rate-limited
+  to 20 per hour per IP" vs. "The /register endpoint is anonymous and
+  capped at 20 requests per hour per source IP") — both stayed in the
+  store as separate records. 0.92 is a defensible conservative default
+  ("don't lose user data"), but different domains have different
+  tolerance: a chat-fact extractor may want 0.80 to aggressively
+  collapse paraphrases, an evidence-log application may want 0.98 to
+  never merge near-duplicates by mistake. Callers have no way to express
+  this today.
+- **Fix outline:** accept an optional `dedup_threshold` field on the add
+  input schema (float in [0, 1], default keeps current 0.92). Validate
+  range, fall back to default when absent. Carry it through
+  `_maybe_dedup_existing` and surface the threshold actually used in the
+  returned `dedup_score` envelope so callers can tell what they got.
+  Optionally: an `AGENTMEMORY_DEFAULT_DEDUP_THRESHOLD` env var for an
+  install-wide default different from 0.92.
+- **Where:**
+  - `agentmemory/runtime/operations.py::DEDUP_SCORE_THRESHOLD` /
+    `_maybe_dedup_existing` — read threshold from `source["dedup_threshold"]`
+    with fallback.
+  - `agentmemory/runtime/operations.py::OPERATIONS["add"].input_schema` —
+    add the field with description.
+  - `tests/test_agentmemory_operations.py` — assert per-call override
+    works and out-of-range values are rejected.
+  - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md)
+    and the original 2026-05-28 live review notes.
+
+---
+
+## 40. Warn callers when `infer=true` drops meaningful content
+
+- **Priority:** P2
+- **Status:** open
+- **Severity:** hygiene
+- **Why:** When `infer=true`, mem0's LLM extracts a compressed fact from
+  the input. Live test on 2026-05-28: input
+  "I just shipped the OAuth refresh token feature with rotation and
+  added a 30-day TTL on refresh tokens. The change went live at 8:31
+  UTC today" → stored as
+  "Shipped the OAuth refresh token feature with rotation". The 30-day
+  TTL detail and the timestamp were both silently dropped. We do expose
+  `transformed: true`, `original_text`, `stored_text`, plus the
+  `additional_records` array (item 36 in the closed set, post-Bug 1
+  fix). A caller paying attention can compare lengths or diff the
+  strings — but most won't. The fan-out array catches the case where
+  mem0 split into N records; this item is about the case where it
+  collapsed instead. Two failure modes, currently one observable.
+- **Fix outline:** when `infer=true` is requested AND
+  `stored_text` is materially shorter than `original_text`
+  (heuristic: ratio below some threshold, e.g. 0.4, or character
+  count delta above some absolute, e.g. 200 chars), add a field
+  `content_loss_warning` to the response with the computed ratio
+  and a short message ("LLM stored a compressed version; consider
+  infer=false or add the dropped detail as a separate record").
+  Make the threshold configurable.
+- **Where:**
+  - `agentmemory/runtime/operations.py::_execute_add` — extend the
+    existing `transformed=true` enrichment block to also emit a
+    warning field when the ratio is below threshold.
+  - `agentmemory/runtime/operations.py::OPERATIONS["add"].description`
+    — note the new warning field in the MCP tool description so
+    clients see it without reading code.
+  - `tests/test_agentmemory_operations.py` — cover the warning fires
+    on a synthetic large-input / small-stored pair and stays absent
+    when the ratio is reasonable.
+  - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md);
+    related to closed item 5 (`infer=true` observability) but a
+    distinct concern.
+
+---
+
+## 41. `memory_reconcile` name is confusing; add an alias and clarify docs
+
+- **Priority:** P3
+- **Status:** open
+- **Severity:** hygiene
+- **Why:** "Reconcile" is overloaded. The 2026-05-28 live review noted
+  that on first encounter it looked like the tool would reconcile
+  drift between mem0 (the source of truth for records) and the
+  scope_registry sidecar (our SQLite mirror). In fact it does
+  conflict detection between contradictory claims (A says X at t1,
+  B says ¬X at t2) — a different operation entirely. A reviewer
+  unfamiliar with item 6 of this backlog would have to read the
+  implementation to find out. Naming is a small fix with outsized
+  return on caller comprehension.
+- **Fix outline:** add `memory_find_conflicts` as the primary MCP
+  tool name and keep `memory_reconcile` as a deprecated alias. The
+  underlying `OperationSpec` stays one entry; both names route to the
+  same handler. Update the tool description to lead with
+  "find contradictory claim pairs" and only mention "reconcile" as
+  the legacy name. Schedule the alias for removal in a major version
+  bump.
+- **Where:**
+  - `agentmemory/mcp.py` and/or `agentmemory/runtime/operations.py` —
+    register both names. Most providers register tools by iterating
+    `OPERATIONS` — add an `aliases` field to `OperationSpec` or
+    expose a deprecated copy.
+  - `docs/USE_CASES.md`, `examples/mcp-demo.md`,
+    `agentmemory/runtime/operations.py` tool description — switch
+    the canonical name.
+  - `CHANGELOG.md` — record the rename and the deprecation window.
+  - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md);
+    closed item 6 implemented the tool, this item improves its name.
 
 ---
 
