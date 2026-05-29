@@ -13,7 +13,14 @@ Format per entry:
 
 Current priority index:
 
-- no open repo-side backlog items remain from the current remediation set
+- **P1 open:** items 36 (dead-man backup ping), 37 (auth-derived user_id)
+- **P2 open:** item 38 (memory_type filter)
+
+Context for the 2026-05-29 additions: see
+[`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md), which also
+captures non-repo follow-ups (TRC `redeploy.sh` commit, telepilothub
+outage triage, agent-side metadata conventions) that do not fit this
+backlog's "single PR" scope.
 
 ---
 
@@ -913,6 +920,94 @@ Current priority index:
   `agentmemory.providers.registry`, rejects unknown provider names without
   falling back to `mem0`, and delegates provider-specific prompt behavior to
   `BaseMemoryProvider.onboarding_configuration()` implementations.
+
+---
+
+## 36. Dead-man ping after successful backup runs
+
+- **Priority:** P1
+- **Status:** open
+- **Severity:** data-retention
+- **Why:** The backup chain has two independent legs — `0 4 * * *` server
+  cron running `deploy/backup-agentmemory.sh`, and a Windows Task Scheduler
+  job at 12:30 local running `pull-agentmemory-backups.ps1`. Each writes a
+  log on success and a non-zero exit on failure, but nothing alerts when a
+  scheduled job *does not run at all* — a stopped cron, a Task Scheduler
+  task that was disabled, or a host that was off when the trigger fired.
+  The earliest signal of silent failure today is when someone tries to
+  restore. Adding a healthchecks.io dead-man URL pinged at the end of
+  each successful run, with a ~26-hour SLA, closes most of that surface
+  for the price of two `curl` calls and a free account.
+- **Where:**
+  - `deploy/backup-agentmemory.sh` — append a `curl -fsS -m 10 "$HEALTHCHECKS_URL" || true` after the final `echo "Backup written: ..."` block. Make `HEALTHCHECKS_URL` an env var so the URL stays out of git.
+  - `O:\backups\pull-agentmemory-backups.ps1` (local script, not in repo) — same pattern at the end of the try block. Document in `/root/docs/agentmemory/RUNBOOK.md`.
+  - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md) §2 P4.
+
+---
+
+## 37. Derive `user_id` from auth context instead of accepting it from payload
+
+- **Priority:** P1
+- **Status:** open
+- **Severity:** security
+- **Why:** The current model accepts `user_id`, `agent_id`, and `run_id`
+  directly from the request body. The bearer token / OAuth flow gates the
+  endpoint but does not bind the caller to a specific identity — any
+  authenticated client can write or read records under any `user_id` it
+  chooses. With a single human operator this is fine in practice (the
+  threat model is "I authored every record"). The moment a second tenant
+  is added, or an automation accepts `user_id` from an LLM-controlled
+  input, records can be mis-attributed or read across users. Filter-based
+  isolation by `user_id` works only as well as the discipline that fills
+  the field.
+- **Fix outline:** Add an opt-in mode (`AGENTMEMORY_ENFORCE_AUTH_USER_ID=1`)
+  that binds each access token to a `user_id` claim at token-issuance time
+  (auth code grant) and refuses payloads where the requested `user_id`
+  does not match the bound claim. Static API tokens grandfather through.
+  Surface the claim under `/.well-known/oauth-protected-resource` and on
+  the `memory_health` response so clients can introspect.
+- **Where:**
+  - `agentmemory/oauth.py::issue_access_token` — accept and persist a
+    `bound_user_id` per token.
+  - `agentmemory/api.py::_authorized_bearer` — return the claim alongside
+    the token validity bit.
+  - `agentmemory/runtime/operations.py::_execute_add` and friends — when
+    the env flag is set and a claim is present, reject payloads where
+    `source["user_id"]` differs from the claim.
+  - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md) §3 F3.
+
+---
+
+## 38. Expose `memory_type` as a first-class filter
+
+- **Priority:** P2
+- **Status:** open
+- **Severity:** hygiene
+- **Why:** The `memory_type` field is part of the `MemoryRecord` shape and
+  the input schema accepts it on add, but it is not exposed as a filter
+  on `memory_search` or `memory_list`. Live inspection on 2026-05-29 found
+  0 of 47 production records populating the field — partly because
+  callers have no read-side incentive to set it. Promoting it to a
+  first-class filter, the same way `user_id` / `agent_id` / `run_id`
+  already are, would give clients a structural way to separate categories
+  of record (`fact` vs `episode` vs `aggregate` vs `draft`) without
+  encoding the category as a free-form text prefix inside the body.
+- **Fix outline:** Add `memory_type` to the search/list input schemas
+  and propagate it through `validate_and_build_search_kwargs` /
+  `validate_and_build_list_kwargs`. mem0 already accepts it on read;
+  localjson's filter implementation needs to be extended to match.
+  Documentation should describe it as a category tag and stop short of
+  prescribing a vocabulary — callers pick their own.
+- **Where:**
+  - `agentmemory/runtime/transport.py::validate_and_build_*_kwargs` —
+    accept and forward `memory_type`.
+  - `agentmemory/runtime/operations.py::OPERATIONS` — add `memory_type`
+    to the `search` / `list` input schemas alongside the scope fields.
+  - `agentmemory/providers/localjson.py::search_memory_page` /
+    `list_memories_page` — add a `memory_type` predicate.
+  - `tests/test_provider_contract_v1.py` and the relevant provider
+    tests — assert the filter narrows results.
+  - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md) §4.
 
 ---
 
