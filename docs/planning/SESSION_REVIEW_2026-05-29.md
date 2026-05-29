@@ -178,6 +178,19 @@ the dead-man side, would close most of the silent-failure surface.
 
 ---
 
+## 4. Companion document: agent-side friction
+
+This document looks at the system from the operator's seat. The
+companion [`AGENT_FRICTION_2026-05-29.md`](AGENT_FRICTION_2026-05-29.md)
+looks at the same state from the *agent's* seat — what an LLM agent
+trying to use this memory has to compensate for, where the cost
+hits in tokens and latency, and where the silent hallucination risks
+live. Both documents look at the same Pool 1 working data; this one
+asks "what is broken", the friction document asks "what does that
+brokenness do to the agent that has to use it".
+
+---
+
 ## 4a. Carry-over from the 2026-05-28 live review
 
 The four bugs surfaced on 2026-05-28 are closed in code. Three
