@@ -13,8 +13,8 @@ Format per entry:
 
 Current priority index:
 
-- **P1 open:** items 36 (dead-man backup ping), 37 (auth-derived user_id),
-  42 (disable TTL acceptance by default)
+- **P1 open:** items 36 (dead-man backup ping), 37 (auth-derived user_id)
+- **P1 closed:** item 42 (TTL off by default — commit c89cc6f)
 - **P2 open:** items 38 (memory_type filter), 40 (infer=true content-loss
   warning), 43 (sanity-guard TTL values when enabled), 44 (sweeper soft
   delete with recovery window)
@@ -1145,7 +1145,7 @@ are defense in depth for installs that intentionally use TTL.
 ## 42. Disable TTL acceptance by default; opt in via env var
 
 - **Priority:** P1
-- **Status:** open
+- **Status:** closed (commit c89cc6f)
 - **Severity:** data-retention
 - **Why:** TTL is a terminal data-loss class with no clean recovery path
   (see [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md) §2

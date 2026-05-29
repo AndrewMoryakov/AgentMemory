@@ -122,7 +122,10 @@ Mitigations, in increasing order of safety, captured as backlog items
    (env-opt-in to enable). This closes the entire risk class at the
    API boundary: callers that pass `ttl_seconds` or `expires_at` get
    a 400 with a clear message until an operator explicitly opts in.
-   Cheapest and most defensive.
+   Cheapest and most defensive. **Closed in commit c89cc6f on
+   2026-05-29.** Production verified: all three contracts hold
+   (ttl_seconds rejected, expires_at rejected, no-TTL passes through),
+   47 in-flight records intact.
 2. `BACKLOG.md` item 43 — sanity-guard the *values* when TTL is
    enabled: reject TTLs shorter than a configurable minimum (default
    60s) or longer than a configurable maximum (default 365 days).
