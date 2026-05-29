@@ -317,7 +317,7 @@ def _execute_search(source: dict[str, Any]) -> Any:
         source=source,
         default_limit=10,
     )
-    return _filter_unexpired_with_limit_refill(
+    return _attach_stale_warnings(_filter_unexpired_with_limit_refill(
         kwargs=kwargs,
         default_limit=10,
         fetch=lambda attempt_kwargs: execute_transport_operation(
@@ -325,7 +325,7 @@ def _execute_search(source: dict[str, Any]) -> Any:
             local_call=lambda: memory_search(**attempt_kwargs),
             proxy_call=lambda: proxy_search(**attempt_kwargs),
         ),
-    )
+    ))
 
 
 def _execute_search_page(source: dict[str, Any]) -> Any:
@@ -341,7 +341,7 @@ def _execute_search_page(source: dict[str, Any]) -> Any:
         local_call=lambda: memory_search_page(**kwargs),
         proxy_call=lambda: proxy_search_page(**kwargs),
     )
-    return _filter_unexpired_page(page)
+    return _attach_stale_warnings(_filter_unexpired_page(page))
 
 
 def _execute_list(source: dict[str, Any]) -> Any:
@@ -351,7 +351,7 @@ def _execute_list(source: dict[str, Any]) -> Any:
         source=source,
         default_limit=100,
     )
-    return _filter_unexpired_with_limit_refill(
+    return _attach_stale_warnings(_filter_unexpired_with_limit_refill(
         kwargs=kwargs,
         default_limit=100,
         fetch=lambda attempt_kwargs: execute_transport_operation(
@@ -359,7 +359,7 @@ def _execute_list(source: dict[str, Any]) -> Any:
             local_call=lambda: memory_list(**attempt_kwargs),
             proxy_call=lambda: proxy_list(**attempt_kwargs),
         ),
-    )
+    ))
 
 
 def _execute_list_page(source: dict[str, Any]) -> Any:
@@ -375,7 +375,7 @@ def _execute_list_page(source: dict[str, Any]) -> Any:
         local_call=lambda: memory_list_page(**kwargs),
         proxy_call=lambda: proxy_list_page(**kwargs),
     )
-    return _filter_unexpired_page(page)
+    return _attach_stale_warnings(_filter_unexpired_page(page))
 
 
 def _execute_reconcile(source: dict[str, Any]) -> Any:
@@ -410,6 +410,31 @@ def _execute_reconcile(source: dict[str, Any]) -> Any:
     }
 
 
+def _attach_stale_warnings(value: Any) -> Any:
+    """Walk an operation result and attach stale_warning to each record
+    whose metadata.stale_after is in the past. Read paths only — pure
+    read-time annotation, no filtering or mutation of stored data."""
+    if isinstance(value, list):
+        return [lifecycle_module.attach_stale_warning(item) if isinstance(item, dict) else item for item in value]
+    if isinstance(value, dict):
+        if isinstance(value.get("items"), list):
+            enriched = dict(value)
+            enriched["items"] = [
+                lifecycle_module.attach_stale_warning(item) if isinstance(item, dict) else item
+                for item in value["items"]
+            ]
+            return enriched
+        if isinstance(value.get("result"), list):
+            enriched = dict(value)
+            enriched["result"] = [
+                lifecycle_module.attach_stale_warning(item) if isinstance(item, dict) else item
+                for item in value["result"]
+            ]
+            return enriched
+        return lifecycle_module.attach_stale_warning(value)
+    return value
+
+
 def _execute_get(source: dict[str, Any]) -> Any:
     memory_id = source["memory_id"]
     result = execute_transport_operation(
@@ -421,7 +446,7 @@ def _execute_get(source: dict[str, Any]) -> Any:
         # Treat expired records as if the sweeper already removed them: the
         # caller will get MemoryNotFoundError, matching hard_delete semantics.
         raise MemoryNotFoundError(memory_id)
-    return result
+    return _attach_stale_warnings(result)
 
 
 def _execute_update(source: dict[str, Any]) -> Any:
@@ -595,7 +620,15 @@ OPERATIONS: dict[str, OperationSpec] = {
         name="search",
         mcp_name="memory_search",
         title="Search Memory",
-        description="Search shared memory semantically.",
+        description=(
+            "Search shared memory semantically. Each returned record carries "
+            "its usual fields plus an optional stale_warning envelope field "
+            "({stale_since, days_overdue}) when the record's "
+            "metadata.stale_after has passed — the record itself is not "
+            "filtered or hidden, but the warning signals that any time-bound "
+            "figures inside should be re-verified before being cited as "
+            "current truth."
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -698,7 +731,13 @@ OPERATIONS: dict[str, OperationSpec] = {
         name="get",
         mcp_name="memory_get",
         title="Get Memory",
-        description="Get one memory by id.",
+        description=(
+            "Get one memory by id. Returns the record with its usual fields "
+            "plus an optional stale_warning envelope field "
+            "({stale_since, days_overdue}) when metadata.stale_after has "
+            "passed — the record is not hidden, but the warning signals that "
+            "time-bound facts inside should be re-verified before citation."
+        ),
         input_schema={
             "type": "object",
             "properties": {"memory_id": {"type": "string"}},

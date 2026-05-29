@@ -133,6 +133,58 @@ def resolve_expires_at(metadata: dict[str, Any] | None) -> str | None:
     return None
 
 
+STALE_AFTER_KEY = "stale_after"
+
+
+def stale_warning_for(record: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any] | None:
+    """Compute a stale_warning envelope for a record whose metadata.stale_after
+    is in the past relative to `now`. Returns None when the record is not
+    stale or stale_after is missing / malformed.
+
+    Used by read paths to surface a non-destructive flag to the agent
+    without filtering or hiding the record (see backlog #46 and
+    SESSION_REVIEW_2026-05-29.md §2 P1). The record itself is returned
+    exactly as today; the warning is an extra envelope field.
+
+    Robust against malformed input: anything that does not parse to a
+    valid date is treated as "not stale" rather than raising.
+    """
+    if not isinstance(record, dict):
+        return None
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    raw = metadata.get(STALE_AFTER_KEY)
+    if raw in (None, ""):
+        return None
+    stale_dt = _parse_expires_at(raw)
+    if stale_dt is None:
+        return None
+    snapshot_now = now or utc_now()
+    if stale_dt > snapshot_now:
+        return None
+    delta = snapshot_now - stale_dt
+    days_overdue = int(delta.total_seconds() // 86400)
+    return {
+        "stale_since": stale_dt.isoformat(),
+        "days_overdue": days_overdue,
+    }
+
+
+def attach_stale_warning(record: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """Return a shallow-copied record with stale_warning attached when
+    applicable. The input record is not mutated. Records that are not
+    stale (or are not records at all) are returned unchanged."""
+    if not isinstance(record, dict):
+        return record
+    warning = stale_warning_for(record, now=now)
+    if warning is None:
+        return record
+    enriched = dict(record)
+    enriched["stale_warning"] = warning
+    return enriched
+
+
 def apply_expiry_to_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
     """Return a metadata dict with expires_at normalized and ttl_seconds dropped.
 

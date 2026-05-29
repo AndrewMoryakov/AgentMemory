@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import agentmemory.runtime.operations as agentmemory_operations
@@ -521,6 +521,82 @@ class LifecycleSweeperTests(unittest.TestCase):
         self.assertEqual(deleted_ids, ["b"])
         self.assertEqual(result["deleted"], 1)
         self.assertEqual(result["swept"], 1)
+
+
+class LifecycleStaleWarningTests(unittest.TestCase):
+    """Backlog #46: read-time stale_warning on records whose
+    metadata.stale_after is in the past. Non-destructive — the record
+    itself is returned unchanged; only the envelope gains a warning."""
+
+    def test_warning_fires_for_past_stale_after(self) -> None:
+        past = (lifecycle_module.utc_now() - timedelta(days=3)).isoformat()
+        record = {
+            "id": "x",
+            "memory": "old aggregate",
+            "metadata": {"stale_after": past},
+        }
+        warning = lifecycle_module.stale_warning_for(record)
+        self.assertIsNotNone(warning)
+        self.assertEqual(warning["days_overdue"], 3)
+        self.assertIn("stale_since", warning)
+
+    def test_no_warning_when_stale_after_is_future(self) -> None:
+        future = (lifecycle_module.utc_now() + timedelta(days=10)).isoformat()
+        record = {"id": "x", "memory": "fresh", "metadata": {"stale_after": future}}
+        self.assertIsNone(lifecycle_module.stale_warning_for(record))
+
+    def test_no_warning_when_field_absent(self) -> None:
+        self.assertIsNone(lifecycle_module.stale_warning_for({"id": "x", "memory": "", "metadata": {}}))
+        self.assertIsNone(lifecycle_module.stale_warning_for({"id": "x", "memory": "", "metadata": {"topic": "ops"}}))
+
+    def test_no_warning_for_malformed_stale_after(self) -> None:
+        # Malformed inputs are treated as "not stale" rather than raising —
+        # read paths must never crash on data shape variance.
+        # Note: integer 0 is intentionally NOT here because _parse_expires_at
+        # treats numeric values as unix epoch seconds, and 0 -> 1970-01-01
+        # is a valid (very stale) date. A caller passing 0 is, by contract,
+        # asking for the record to be flagged as stale-since-the-epoch.
+        for bad in ["not-a-date", "", None, "2026-13-99", {"obj": True}, ["array"]]:
+            record = {"id": "x", "memory": "", "metadata": {"stale_after": bad}}
+            self.assertIsNone(lifecycle_module.stale_warning_for(record))
+
+    def test_z_suffix_form_also_works(self) -> None:
+        # Legacy / hand-written records may use the "Z" suffix.
+        past_z = (lifecycle_module.utc_now() - timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        record = {"id": "x", "memory": "", "metadata": {"stale_after": past_z}}
+        warning = lifecycle_module.stale_warning_for(record)
+        self.assertIsNotNone(warning)
+        self.assertEqual(warning["days_overdue"], 1)
+
+    def test_attach_stale_warning_preserves_original(self) -> None:
+        past = (lifecycle_module.utc_now() - timedelta(days=2)).isoformat()
+        original = {
+            "id": "x",
+            "memory": "important text — must be byte-identical",
+            "metadata": {"stale_after": past, "case_id": "abc"},
+        }
+        enriched = lifecycle_module.attach_stale_warning(original)
+        # Original dict not mutated.
+        self.assertNotIn("stale_warning", original)
+        # Enriched copy has the same content plus stale_warning.
+        self.assertEqual(enriched["memory"], original["memory"])
+        self.assertEqual(enriched["metadata"], original["metadata"])
+        self.assertIn("stale_warning", enriched)
+        self.assertEqual(enriched["stale_warning"]["days_overdue"], 2)
+
+    def test_attach_stale_warning_pinned_now_for_determinism(self) -> None:
+        record = {
+            "id": "x",
+            "memory": "",
+            "metadata": {"stale_after": "2026-05-27T00:00:00+00:00"},
+        }
+        pinned_now = datetime(2026, 5, 30, 12, 0, tzinfo=timezone.utc)
+        warning = lifecycle_module.stale_warning_for(record, now=pinned_now)
+        self.assertEqual(warning["days_overdue"], 3)
+
+    def test_attach_stale_warning_no_op_for_non_dict(self) -> None:
+        self.assertEqual(lifecycle_module.attach_stale_warning("not a dict"), "not a dict")
+        self.assertIsNone(lifecycle_module.attach_stale_warning(None))
 
 
 class LifecycleTTLDisabledByDefaultTests(unittest.TestCase):
