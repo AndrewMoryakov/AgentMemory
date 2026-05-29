@@ -104,6 +104,22 @@ class MetricsRegistryTests(unittest.TestCase):
 
 
 class LifecycleTTLTests(unittest.TestCase):
+    # Existing TTL tests exercise the *enabled* path — they were written
+    # before the closed-by-default gate landed. Set the env var here so
+    # they keep testing the lifecycle logic, not the gate. A separate
+    # class below covers the disabled-by-default behavior.
+    def setUp(self) -> None:
+        import os
+        self._saved_allow_ttl = os.environ.get("AGENTMEMORY_ALLOW_TTL")
+        os.environ["AGENTMEMORY_ALLOW_TTL"] = "1"
+
+    def tearDown(self) -> None:
+        import os
+        if self._saved_allow_ttl is None:
+            os.environ.pop("AGENTMEMORY_ALLOW_TTL", None)
+        else:
+            os.environ["AGENTMEMORY_ALLOW_TTL"] = self._saved_allow_ttl
+
     def test_resolve_expires_at_from_ttl_seconds(self) -> None:
         now = lifecycle_module.utc_now()
         resolved = lifecycle_module.resolve_expires_at({"ttl_seconds": 60})
@@ -505,6 +521,83 @@ class LifecycleSweeperTests(unittest.TestCase):
         self.assertEqual(deleted_ids, ["b"])
         self.assertEqual(result["deleted"], 1)
         self.assertEqual(result["swept"], 1)
+
+
+class LifecycleTTLDisabledByDefaultTests(unittest.TestCase):
+    """Asserts the closed-by-default safety gate added in backlog #42.
+
+    Without AGENTMEMORY_ALLOW_TTL set, any incoming metadata field that
+    would have set TTL (ttl_seconds or expires_at) must be rejected
+    loudly, and the sweeper must not be scheduled. With the env var
+    set, behavior matches LifecycleTTLTests above.
+    """
+
+    def setUp(self) -> None:
+        import os
+        self._saved_allow_ttl = os.environ.get("AGENTMEMORY_ALLOW_TTL")
+        # Ensure the env var is *unset* for the gate-disabled tests
+        # below; tests can opt in selectively.
+        os.environ.pop("AGENTMEMORY_ALLOW_TTL", None)
+
+    def tearDown(self) -> None:
+        import os
+        if self._saved_allow_ttl is None:
+            os.environ.pop("AGENTMEMORY_ALLOW_TTL", None)
+        else:
+            os.environ["AGENTMEMORY_ALLOW_TTL"] = self._saved_allow_ttl
+
+    def test_resolve_expires_at_rejects_ttl_seconds_when_disabled(self) -> None:
+        from agentmemory.providers.base import ProviderValidationError
+        with self.assertRaises(ProviderValidationError) as ctx:
+            lifecycle_module.resolve_expires_at({"ttl_seconds": 60})
+        # Message should name the env var so operators know how to opt in.
+        self.assertIn("AGENTMEMORY_ALLOW_TTL", str(ctx.exception))
+
+    def test_resolve_expires_at_rejects_expires_at_when_disabled(self) -> None:
+        from agentmemory.providers.base import ProviderValidationError
+        with self.assertRaises(ProviderValidationError) as ctx:
+            lifecycle_module.resolve_expires_at({"expires_at": "2030-01-01T00:00:00Z"})
+        self.assertIn("AGENTMEMORY_ALLOW_TTL", str(ctx.exception))
+
+    def test_resolve_expires_at_silent_when_no_ttl_field_supplied(self) -> None:
+        # Gate must be invisible when caller did not ask for TTL.
+        self.assertIsNone(lifecycle_module.resolve_expires_at({"topic": "general"}))
+        self.assertIsNone(lifecycle_module.resolve_expires_at({}))
+        # Null and empty-string are treated as absent — consistent with bug 3.
+        self.assertIsNone(lifecycle_module.resolve_expires_at({"ttl_seconds": None}))
+        self.assertIsNone(lifecycle_module.resolve_expires_at({"expires_at": ""}))
+
+    def test_apply_expiry_to_metadata_propagates_disabled_error(self) -> None:
+        from agentmemory.providers.base import ProviderValidationError
+        with self.assertRaises(ProviderValidationError):
+            lifecycle_module.apply_expiry_to_metadata({"ttl_seconds": 60})
+
+    def test_sweep_interval_returns_zero_when_disabled(self) -> None:
+        # Sweeper must not wake when TTL is off, even if the explicit
+        # sweep-minutes env var is set to a positive value.
+        import os
+        prev = os.environ.get("AGENTMEMORY_TTL_SWEEP_MINUTES")
+        os.environ["AGENTMEMORY_TTL_SWEEP_MINUTES"] = "5"
+        try:
+            self.assertEqual(lifecycle_module.sweep_interval_seconds(), 0)
+        finally:
+            if prev is None:
+                os.environ.pop("AGENTMEMORY_TTL_SWEEP_MINUTES", None)
+            else:
+                os.environ["AGENTMEMORY_TTL_SWEEP_MINUTES"] = prev
+
+    def test_opting_in_via_env_unblocks_ttl(self) -> None:
+        # Explicit opt-in: setting the env var inside a test restores
+        # the legacy enabled-path behavior. Tests this contract is
+        # actually toggleable, not just default-off.
+        import os
+        os.environ["AGENTMEMORY_ALLOW_TTL"] = "1"
+        try:
+            resolved = lifecycle_module.resolve_expires_at({"ttl_seconds": 60})
+            self.assertIsNotNone(resolved)
+            self.assertGreater(lifecycle_module.sweep_interval_seconds(), 0)
+        finally:
+            os.environ.pop("AGENTMEMORY_ALLOW_TTL", None)
 
 
 if __name__ == "__main__":

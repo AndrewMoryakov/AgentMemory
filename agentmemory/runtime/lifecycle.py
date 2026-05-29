@@ -25,6 +25,18 @@ from agentmemory.providers.base import ProviderValidationError
 EXPIRES_AT_KEY = "expires_at"
 TTL_SECONDS_KEY = "ttl_seconds"
 
+# Master switch. TTL is OFF by default — see backlog #42 and
+# SESSION_REVIEW_2026-05-29.md §2 P5. The class of failure being closed
+# is: a single typo in TTL units permanently deletes a production
+# record within ~10 minutes with no recovery path from backup. Opting
+# in is a deliberate operator decision, not a default.
+_ALLOW_TTL_ENV = "AGENTMEMORY_ALLOW_TTL"
+
+
+def ttl_acceptance_enabled() -> bool:
+    raw = os.environ.get(_ALLOW_TTL_ENV, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -69,6 +81,24 @@ def resolve_expires_at(metadata: dict[str, Any] | None) -> str | None:
     expiry, not unlimited persistence.
     """
     if not isinstance(metadata, dict):
+        return None
+
+    if not ttl_acceptance_enabled():
+        # Closed-by-default safety gate. If the caller supplied any TTL
+        # field, refuse — silent strip would reintroduce the bug-3
+        # anti-pattern (caller believes TTL is set, it isn't). If no
+        # TTL field was supplied, return None just like the legacy
+        # "no expiry" path so this gate is invisible in the common case.
+        for key in (EXPIRES_AT_KEY, TTL_SECONDS_KEY):
+            if key in metadata and metadata[key] not in (None, ""):
+                raise ProviderValidationError(
+                    f"TTL acceptance is disabled. metadata.{key} was provided, "
+                    f"but storing records with TTL is off by default because the "
+                    f"failure mode (typo deletes data with no recovery path from "
+                    f"backup) is terminal. Either remove the TTL field from "
+                    f"metadata, or opt in by setting environment variable "
+                    f"{_ALLOW_TTL_ENV}=1 in the server's .env."
+                )
         return None
 
     if EXPIRES_AT_KEY in metadata:
@@ -154,6 +184,13 @@ _SWEEP_ENV = "AGENTMEMORY_TTL_SWEEP_MINUTES"
 
 
 def sweep_interval_seconds() -> int:
+    # When TTL acceptance is disabled, the sweeper has nothing legitimate
+    # to do — no new TTL'd records can be written. Even if legacy records
+    # were stored with expires_at before the gate landed, keeping the
+    # sweeper off means they become read-invisible at expiry but never
+    # hard-deleted, leaving a recovery path via direct metadata edit.
+    if not ttl_acceptance_enabled():
+        return 0
     raw = os.environ.get(_SWEEP_ENV, "").strip()
     if not raw:
         return _SWEEP_INTERVAL_SECONDS_DEFAULT

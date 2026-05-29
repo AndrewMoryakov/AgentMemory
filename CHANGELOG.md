@@ -6,6 +6,19 @@ The format is intentionally simple during public alpha.
 
 ## [Unreleased]
 
+### Changed (default behavior)
+
+- **TTL acceptance is now OFF by default.** Any `add_memory` request that
+  carries `metadata.ttl_seconds` or `metadata.expires_at` is rejected with
+  a `ProviderValidationError` until the operator opts in by setting
+  `AGENTMEMORY_ALLOW_TTL=1` in the server's `.env`. The background TTL
+  sweeper is also disabled in the off state. Closes backlog item #42 and
+  the data-loss class documented in `docs/planning/SESSION_REVIEW_2026-05-29.md`
+  §2 P5. Production check on 2026-05-29 found 0 of 47 records currently
+  carry TTL, so the default flip is a no-op for in-flight data. Migration:
+  installs that intentionally store TTL'd records must set
+  `AGENTMEMORY_ALLOW_TTL=1` before the next add request that uses TTL.
+
 ### Added
 
 - `memory_add` now surfaces all records when the provider produces a fan-out from a single call (e.g. mem0 with `infer=true` splitting input into multiple extracted facts). The primary record is returned as before; the remaining writes are exposed verbatim under `additional_records` on the primary, each a full `MemoryRecord` with its own id and metadata. The mem0 adapter also syncs every fan-out id to the scope registry so `list_scopes` counts and the TTL sweeper see them.
