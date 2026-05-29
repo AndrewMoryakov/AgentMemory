@@ -727,6 +727,11 @@ class Mem0Provider(BaseMemoryProvider):
                 continue
             payload = getattr(point, "payload", None)
             if isinstance(payload, dict):
+                # qdrant stores the memory id on the point itself, not in payload.
+                # Without this, scope_registry rebuild loses every record's id.
+                point_id = getattr(point, "id", None)
+                if point_id is not None and not payload.get("id"):
+                    payload = {**payload, "id": str(point_id)}
                 payloads.append(payload)
         return payloads
 

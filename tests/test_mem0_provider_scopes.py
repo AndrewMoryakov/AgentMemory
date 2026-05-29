@@ -93,3 +93,41 @@ class Mem0ProviderScopeInventoryTests(unittest.TestCase):
         inventory = self.provider.list_scopes()
 
         self.assertEqual(inventory["totals"]["users"], 1)
+
+    def test_iter_scope_payloads_attaches_point_id_to_payload(self) -> None:
+        # Regression: qdrant points store the memory id on the point itself,
+        # not in the payload. Without this attachment, scope_registry rebuild
+        # rejected every record with "Mem0 returned a memory payload without an id".
+        import pickle
+        import sqlite3
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        point = SimpleNamespace(
+            id="9d3f4a10-1111-2222-3333-444444444444",
+            payload={
+                "user_id": "topazd2",
+                "agent_id": "fcm",
+                "data": "memory text",
+                "hash": "abc",
+                "created_at": "2026-05-29T07:00:00+00:00",
+                "updated_at": "2026-05-29T07:00:00+00:00",
+            },
+        )
+
+        db_path = Path(self.temp_dir.name) / "fake_qdrant.sqlite"
+        connection = sqlite3.connect(db_path)
+        try:
+            connection.execute("CREATE TABLE points (point BLOB)")
+            connection.execute("INSERT INTO points (point) VALUES (?)", (pickle.dumps(point),))
+            connection.commit()
+        finally:
+            connection.close()
+
+        with patch.object(self.provider, "_qdrant_sqlite_path", return_value=db_path):
+            payloads = self.provider._iter_scope_payloads()
+
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[0]["id"], "9d3f4a10-1111-2222-3333-444444444444")
+        self.assertEqual(payloads[0]["user_id"], "topazd2")
