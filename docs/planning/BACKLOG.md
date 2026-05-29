@@ -17,9 +17,12 @@ Current priority index:
 - **P1 closed:** item 42 (TTL off by default — commit c89cc6f)
 - **P2 open:** items 38 (memory_type filter), 40 (infer=true content-loss
   warning), 43 (sanity-guard TTL values when enabled), 44 (sweeper soft
-  delete with recovery window)
+  delete with recovery window), 46 (read-time stale_warning),
+  50 (living-summary workflow guide)
 - **P3 open:** items 39 (dedup threshold parametrization), 41
-  (memory_reconcile alias), 45 (sweeper deletion alerts)
+  (memory_reconcile alias), 45 (sweeper deletion alerts), 47 (pre-write
+  similarity check), 48 (pool health endpoint), 49 (duplicate detection
+  report)
 
 Context for the 2026-05-29 additions: see
 [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md), which also
@@ -36,6 +39,14 @@ Items 42-45 close the TTL-driven data-loss class identified in
 [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md) §2 P5.
 Item 42 alone closes the bulk of the risk at the API boundary; 43-45
 are defense in depth for installs that intentionally use TTL.
+
+Items 46-50 come from the data-degradation design exploration captured
+in [`DATA_DEGRADATION_DESIGN_2026-05-29.md`](DATA_DEGRADATION_DESIGN_2026-05-29.md).
+That document maps the design space of prevention and remediation for
+the slow-signal-to-noise-erosion class (distinct from the TTL terminal
+deletion class). Item 46 is the cheapest highest-return move from that
+analysis; 47-49 are deferred until proven necessary; 50 is workflow
+documentation rather than runtime code.
 
 ---
 
@@ -1272,6 +1283,228 @@ are defense in depth for installs that intentionally use TTL.
   - `.env.example` — document the threshold and webhook env vars.
   - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md)
     §2 P5 mitigation 4.
+
+---
+
+## 46. Read-time `stale_warning` on records with passed `metadata.stale_after`
+
+- **Priority:** P2
+- **Status:** open
+- **Severity:** data-retention
+- **Why:** The most dangerous hallucination class in the production
+  legal-case pool is the aggregate-shaped record dated 2026-05-27 with
+  figure "ИТОГО 297 580 руб." (see
+  [`SESSION_REVIEW`](SESSION_REVIEW_2026-05-29.md) §2 P1 and
+  [`AGENT_FRICTION`](AGENT_FRICTION_2026-05-29.md) §6). The figure was
+  current as of the record's creation date; once new financial
+  movements happen after that date, it is wrong. Today the system has
+  no representation of "current as of <date>" — the staleness lives in
+  the body text where the agent may or may not parse it. Adding a
+  `metadata.stale_after` convention (free, doc-only) plus a read-time
+  warning when that date has passed (this item) makes the hallucination
+  class visible to the agent at the moment it tries to cite the record.
+  It is the highest-leverage item in the
+  [`DATA_DEGRADATION_DESIGN`](DATA_DEGRADATION_DESIGN_2026-05-29.md)
+  observability category because the signal is consumed by the agent
+  in real time, not by an operator after the fact.
+- **Fix outline:** every read path that returns a `MemoryRecord` checks
+  `metadata.stale_after` (or `stale_at` — pick the canonical name and
+  document it). If present and parseable and in the past, add a
+  `stale_warning` field to the returned envelope:
+  ```
+  {
+    "id": "...",
+    "memory": "...",
+    "metadata": {...},
+    "stale_warning": {
+      "stale_since": "2026-05-27T00:00:00+00:00",
+      "days_overdue": 2
+    }
+  }
+  ```
+  Non-destructive: nothing is filtered, nothing is hidden, nothing is
+  marked archived. The record is returned exactly as today plus a
+  warning flag the agent can consult. The same parsing helper from
+  `lifecycle.py::_parse_expires_at` can be reused for the date
+  parsing (canonicalises `Z` vs `+00:00`, handles unix seconds).
+- **Where:**
+  - `agentmemory/runtime/lifecycle.py` — add a `stale_warning_for(record)`
+    helper that returns the warning dict or `None`.
+  - `agentmemory/runtime/operations.py::_execute_get`,
+    `_execute_search`, `_execute_list` (and their `_page` variants) —
+    walk the records, attach `stale_warning` where appropriate.
+  - `agentmemory/runtime/operations.py::OPERATIONS[…].description` —
+    document the new field for MCP consumers.
+  - `tests/test_observability_lifecycle.py` or a new
+    `tests/test_stale_warning.py` — cover: warning fires for
+    past `stale_after`, absent for future `stale_after`, absent for
+    missing field, robust to malformed values (no crash, no warning),
+    handles both `Z` and `+00:00` ISO forms.
+  - Context: [`DATA_DEGRADATION_DESIGN`](DATA_DEGRADATION_DESIGN_2026-05-29.md)
+    §3.3, recommended sequence Step 1.
+
+---
+
+## 47. Pre-write similarity check: surface candidates for update instead of blind add
+
+- **Priority:** P3
+- **Status:** open
+- **Severity:** hygiene
+- **Why:** Pool 1 today has structural duplication: monthly bank-statement
+  analyses (April, March, …) all share the same shape and overlap in
+  content, and a period-wide aggregate exists alongside each of them.
+  Future writes into the same pool will tend to compound this — a new
+  May analysis will be a near-duplicate of April. Today the caller has
+  no signal that "you are about to write a record that is 0.85 similar
+  to record X in the same scope; did you mean to update X?". The
+  natural place to surface that signal is at the moment of add.
+  Mechanism is *suggestive* (not coercive): we never auto-merge or
+  refuse the write — we just give the caller the chance to choose
+  update over add.
+- **Fix outline:** opt-in via an `on_similar` field on the add input:
+  ```
+  on_similar: "warn" | "skip" | "merge_metadata"
+  on_similar_threshold: 0.80   # default if 'warn'
+  ```
+  When `warn`, the runtime runs a single semantic search in the same
+  scope before insert, returns the matching candidate (if any above
+  the threshold) on a `similar_existing` field of the response, and
+  still performs the insert. The caller can then decide whether to
+  delete/update what was just written. `skip` returns the existing
+  record (like dedup but at the user's chosen threshold). `merge_metadata`
+  performs the write but merges the candidate's metadata into the new
+  record. Default behaviour stays "always insert, no extra cost" so
+  existing callers see no change.
+- **Where:**
+  - `agentmemory/runtime/operations.py::_execute_add` and friends — add
+    the pre-write search branch.
+  - `agentmemory/runtime/operations.py::OPERATIONS["add"].input_schema`
+    — document the new fields.
+  - `tests/test_agentmemory_operations.py` — cover the three modes plus
+    the "no similar found" path and the absent-field path.
+  - Context: [`DATA_DEGRADATION_DESIGN`](DATA_DEGRADATION_DESIGN_2026-05-29.md)
+    §3.2. Activation deferred until duplication is visibly costing the
+    pool — the tradeoff is one extra search per write, which is
+    expensive enough that defaulting on is not justified at current
+    scale.
+
+---
+
+## 48. `/admin/pool-health` endpoint: scope density, growth rate, age distribution
+
+- **Priority:** P3
+- **Status:** open
+- **Severity:** hygiene (observability)
+- **Why:** There is no first-class signal of pool health today. An
+  operator who wants to know "is Pool 1 still healthy?" has to write
+  bespoke queries against scope_registry. Once there are two pools or
+  two operators, that becomes the wrong shape. An admin endpoint that
+  returns the structured health snapshot for any scope (or for the
+  whole provider) gives a single readable answer and forms the basis
+  for any future alerting policy ("if any scope grows by more than X%
+  in a day, warn"). Defer activation until at least one of: (a) the
+  pool grows past ~100 records, (b) there is more than one operator,
+  (c) a programmatic monitor needs to consume the data.
+- **Fix outline:** new GET endpoint `/admin/pool-health` (and
+  `/admin/pool-health?user_id=…` / `?agent_id=…`) returning:
+  ```
+  {
+    "provider": "mem0",
+    "scope": {"user_id": "topazd2", "agent_id": "family_court_..."},
+    "total": 44,
+    "first_seen_at": "...",
+    "last_seen_at": "...",
+    "growth_last_7d": 0,
+    "growth_last_30d": 12,
+    "with_metadata": {"any": 31, "stale_after": 3, "archived": 0},
+    "age_distribution_days": {"0-7": 0, "7-30": 12, "30+": 32}
+  }
+  ```
+  Authenticated under the existing admin gating. Read-only, no
+  mutation.
+- **Where:**
+  - `agentmemory/runtime/admin.py` — new `pool_health()` function with
+    the SQL aggregations against `scope_registry`.
+  - `agentmemory/api.py::do_GET` — route `/admin/pool-health`.
+  - `tests/test_agentmemory_admin.py` — cover the aggregations.
+  - Context: [`DATA_DEGRADATION_DESIGN`](DATA_DEGRADATION_DESIGN_2026-05-29.md)
+    §3.3.
+
+---
+
+## 49. Duplicate detection report: scheduled cluster pass over a scope
+
+- **Priority:** P3
+- **Status:** open
+- **Severity:** hygiene
+- **Why:** When a pool already has accumulated duplication (Pool 1
+  today, or any future pool that drifts in the same direction), the
+  remediation step needs a *target list* — which records are
+  candidates to be merged, archived, or deleted. Computing this is
+  not the same as pre-write similarity (item 47, which runs once
+  per write at fixed cost); it is a scheduled batch pass that
+  embeds the whole scope and clusters cosine-close records. Output
+  is a report, not a destructive action — the human or agent
+  reviews it and decides what to do with each cluster. This unblocks
+  the living-summary refactor (item 50) by giving it a concrete
+  set of candidates to fold in.
+- **Fix outline:** new operation `memory_find_duplicates(user_id,
+  agent_id, threshold=0.85, limit=50)`. Pulls all records in scope,
+  computes pairwise similarity via the provider's embedding (re-using
+  whatever the provider exposes — mem0's search infrastructure can be
+  used per-record), and returns cluster groups with summary stats.
+  Read-only — never mutates the store. Exposed as both an admin
+  endpoint and an MCP tool so the legal-case agent can call it
+  before a synthesis pass.
+- **Where:**
+  - `agentmemory/runtime/operations.py` — new
+    `OPERATIONS["find_duplicates"]` entry.
+  - Provider contract — `find_duplicates_in_scope()` method, default
+    implementation in `BaseMemoryProvider` that does the naive
+    pairwise pass; mem0 can override with a smarter qdrant-side
+    clustering if useful.
+  - `tests/test_agentmemory_operations.py` — cover at least: returns
+    correct clusters for a hand-crafted set with one obvious dup pair;
+    empty result on no-dup pool; respects threshold.
+  - Context: [`DATA_DEGRADATION_DESIGN`](DATA_DEGRADATION_DESIGN_2026-05-29.md)
+    §3.3 and §4.1.
+
+---
+
+## 50. Living-summary workflow guide: docs + system-prompt template
+
+- **Priority:** P2
+- **Status:** open
+- **Severity:** hygiene (workflow)
+- **Why:** The structural problem in Pool 1 is *not* a missing feature
+  — mem0 + AgentMemory already support everything needed to operate
+  in a "living summary" workflow (one canonical record per topic,
+  `archived: true` to retire chunks, `update_memory` to keep summaries
+  current). What is missing is a **documented pattern** for how to use
+  the runtime in that workflow, so an agent (or its operator) can
+  adopt it without reverse-engineering the implications of every
+  field. Without this doc, every new agent that uses AgentMemory will
+  drift toward the "document store" anti-pattern Pool 1 exhibits.
+- **Fix outline:** new doc `docs/USE_CASES.md` (or extending an
+  existing one) describing:
+  - The two extremes ("dump every chunk" vs. "living summaries") with
+    concrete write patterns.
+  - The metadata convention (`kind: "summary" | "evidence" | "context" | "draft"`,
+    `event_date`, `stale_after`, `supersedes`) and the rationale for
+    each field.
+  - System-prompt fragments that an agent owner can paste into their
+    own agent's prompt to adopt the convention.
+  - A worked example using Pool 1 as the case study: pre-state (44
+    chunks), post-state (5-7 living summaries plus archived raw chunks),
+    the migration path.
+  - When to *not* use the living-summary pattern (small pools, one-shot
+    notes, scratch contexts).
+- **Where:**
+  - `docs/USE_CASES.md` — main writeup.
+  - `examples/` — a small example agent prompt fragment, importable.
+  - `README.md` — link from the documentation map.
+  - Context: [`DATA_DEGRADATION_DESIGN`](DATA_DEGRADATION_DESIGN_2026-05-29.md)
+    §3.4 and §4.2.
 
 ---
 

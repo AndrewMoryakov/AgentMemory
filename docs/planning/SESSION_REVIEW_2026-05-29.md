@@ -255,6 +255,26 @@ brokenness do to the agent that has to use it".
 
 ---
 
+## 4b. Data-degradation design space
+
+A separate document, [`DATA_DEGRADATION_DESIGN_2026-05-29.md`](DATA_DEGRADATION_DESIGN_2026-05-29.md),
+explores how to prevent future pools from drifting into the same
+state as Pool 1, and how to remediate Pool 1 itself. It maps the
+mechanisms across five layers (schema, behavior, observability,
+workflow, architecture) and recommends a sequence that starts with
+the cheapest, highest-leverage move (read-time `stale_warning` plus a
+manual annotation pass over the existing aggregates) and explicitly
+defers architectural shifts until cheaper mechanisms have failed.
+
+Five new backlog items derive from that exploration — `BACKLOG.md`
+items 46-50 — covering read-time stale warnings, pre-write similarity
+checks, pool health observability, duplicate detection reporting, and
+the living-summary workflow guide. Item 46 is the only one explicitly
+flagged for activation now; the rest are deferred until evidence
+warrants.
+
+---
+
 ## 4a. Carry-over from the 2026-05-28 live review
 
 The four bugs surfaced on 2026-05-28 are closed in code. Three
