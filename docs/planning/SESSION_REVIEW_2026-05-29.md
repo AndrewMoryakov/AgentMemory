@@ -81,6 +81,67 @@ on that repo will delete it. The script itself self-documents the
 network-gate pattern and references the host-canonical
 `/root/scripts/compose-deploy-guard.sh`.
 
+### P5 — TTL is a terminal data-loss class with no recovery path
+
+Live check on 2026-05-29: **0 of 47 production records currently have
+TTL set**, so the risk is not yet realised in the legal pool. But the
+class of loss is structurally severe enough to warrant treating it as
+a present-tense P-item rather than a future F-item, because once it
+fires there is no clean recovery:
+
+- A typo in units (`ttl_seconds: 6` instead of `6 * 60 * 60 * 24 * 180`
+  for "six months") permanently deletes the record within ~10 minutes.
+  Bug 3's fix rejects malformed values like `"6s"` and bools, but not
+  legit-looking numbers that mean the wrong thing.
+- `infer=true` with TTL applies the same TTL to every fan-out record,
+  not just the primary. A 60-second TTL on a five-fact input wipes
+  all five within a minute. The caller saw only the primary in the
+  response; the others were never observed.
+- The sweeper hard-deletes without notifying anyone. There is no log
+  signal that the user reads, no metric that anything watches, no
+  alert.
+- **Restore from backup does not recover TTL'd records.** The tarball
+  brings the record back into qdrant, but `expires_at` is still in
+  the past, so the read path filters it (`is_expired` check in
+  `_execute_get`) and the next sweeper cycle deletes it again. Recovery
+  requires forensic access to `qdrant.sqlite` to rewrite the
+  `expires_at` field — not a path any sensible runbook can describe.
+- Between `expires_at` and the next sweeper cycle (≤10 minutes), the
+  record is physically in qdrant but invisible through every API
+  surface, including scope_registry. Even knowing the exact id and
+  having API auth, there is no read path that returns it.
+
+This is structurally more severe than the stale-aggregate hallucination
+(§2 P1): that one leaves the record visible and updatable; TTL erases
+without trace and resists every standard recovery procedure.
+
+Mitigations, in increasing order of safety, captured as backlog items
+42-45:
+
+1. `BACKLOG.md` item 42 — **disable TTL acceptance by default**
+   (env-opt-in to enable). This closes the entire risk class at the
+   API boundary: callers that pass `ttl_seconds` or `expires_at` get
+   a 400 with a clear message until an operator explicitly opts in.
+   Cheapest and most defensive.
+2. `BACKLOG.md` item 43 — sanity-guard the *values* when TTL is
+   enabled: reject TTLs shorter than a configurable minimum (default
+   60s) or longer than a configurable maximum (default 365 days).
+   Catches the typo case.
+3. `BACKLOG.md` item 44 — switch the sweeper from hard-delete to
+   soft-delete (`metadata.archived: true` + `archived_reason:
+   "ttl_expired"`). Read paths already filter archived records.
+   Records survive and can be revived by clearing the flag. Add a
+   second-stage cleanup that hard-deletes archived records older
+   than N days, giving an operator-visible recovery window.
+4. `BACKLOG.md` item 45 — emit a structured signal (log line, metric,
+   optional healthchecks.io ping) whenever the sweeper deletes
+   records. The user gets a chance to notice unexpected deletions.
+
+Item 42 alone closes ~100% of the accidental-loss surface. The other
+three are defense in depth for installs that intentionally use TTL.
+
+---
+
 ### P4 — No monitoring / no failure alerts
 
 The earliest you would learn that a backup is silently failing is when

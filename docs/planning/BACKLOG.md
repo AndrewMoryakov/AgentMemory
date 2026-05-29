@@ -13,9 +13,13 @@ Format per entry:
 
 Current priority index:
 
-- **P1 open:** items 36 (dead-man backup ping), 37 (auth-derived user_id)
-- **P2 open:** items 38 (memory_type filter), 40 (infer=true content-loss warning)
-- **P3 open:** items 39 (dedup threshold parametrization), 41 (memory_reconcile alias)
+- **P1 open:** items 36 (dead-man backup ping), 37 (auth-derived user_id),
+  42 (disable TTL acceptance by default)
+- **P2 open:** items 38 (memory_type filter), 40 (infer=true content-loss
+  warning), 43 (sanity-guard TTL values when enabled), 44 (sweeper soft
+  delete with recovery window)
+- **P3 open:** items 39 (dedup threshold parametrization), 41
+  (memory_reconcile alias), 45 (sweeper deletion alerts)
 
 Context for the 2026-05-29 additions: see
 [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md), which also
@@ -27,6 +31,11 @@ Items 39-41 are design discussions surfaced during the 2026-05-28 live
 review of the four bugs (now closed in code as items DEFECT-06..09 under
 "Closed"). They were missed in the initial 2026-05-29 backlog pass and
 added in a follow-up.
+
+Items 42-45 close the TTL-driven data-loss class identified in
+[`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md) §2 P5.
+Item 42 alone closes the bulk of the risk at the API boundary; 43-45
+are defense in depth for installs that intentionally use TTL.
 
 ---
 
@@ -1130,6 +1139,139 @@ added in a follow-up.
   - `CHANGELOG.md` — record the rename and the deprecation window.
   - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md);
     closed item 6 implemented the tool, this item improves its name.
+
+---
+
+## 42. Disable TTL acceptance by default; opt in via env var
+
+- **Priority:** P1
+- **Status:** open
+- **Severity:** data-retention
+- **Why:** TTL is a terminal data-loss class with no clean recovery path
+  (see [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md) §2
+  P5). Restoring from backup does not bring TTL'd records back to a
+  usable state because the read paths still filter them and the sweeper
+  immediately re-deletes. Today's default is "accept any well-typed
+  `ttl_seconds` / `expires_at`" — a single typo in units (`6` instead of
+  `6*60*60*24*180` for "six months") permanently deletes a record within
+  ~10 minutes. Production currently has 0 of 47 records with TTL set, so
+  switching the default closes the entire risk class at the API boundary
+  without breaking anything in flight.
+- **Fix outline:** add an env var `AGENTMEMORY_ALLOW_TTL` (default
+  unset / `0`). When TTL is disabled and a request includes
+  `metadata.ttl_seconds` or `metadata.expires_at`, raise
+  `ProviderValidationError` with a clear message that says how to opt
+  in. When enabled, behave exactly as today (subject to items 43-45 on
+  top). Use *reject* semantics, not *silent strip* — silent strip is
+  the bug-3 anti-pattern we just fixed for malformed values, and the
+  same anti-pattern should not reappear at the feature gate.
+- **Where:**
+  - `agentmemory/runtime/lifecycle.py::resolve_expires_at` /
+    `apply_expiry_to_metadata` — guard at the top.
+  - `agentmemory/runtime/lifecycle.py::sweep_interval_seconds` — also
+    short-circuit to 0 (disabled) when `AGENTMEMORY_ALLOW_TTL` is
+    unset, so the sweeper does not start.
+  - `.env.example` — document the variable next to the existing
+    `AGENTMEMORY_OAUTH_DISABLE_DCR` pattern.
+  - `README.md` and `CHANGELOG.md` — note the default change.
+  - `tests/test_observability_lifecycle.py` — existing TTL tests need
+    a setUp that sets `AGENTMEMORY_ALLOW_TTL=1` so they still exercise
+    the enabled path. Add a new test asserting the default is reject.
+  - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md)
+    §2 P5 mitigation 1.
+
+---
+
+## 43. Sanity-guard TTL values when TTL is enabled
+
+- **Priority:** P2
+- **Status:** open
+- **Severity:** data-retention
+- **Why:** With item 42 closing the *accidental enable* surface, this
+  item closes the *typo in units* surface for operators that
+  intentionally use TTL. A `ttl_seconds: 6` (meant as six months) is
+  syntactically valid today and would delete the record in six
+  seconds. Likewise a `ttl_seconds: 9_999_999_999` is almost certainly
+  a paste accident, not intent. Bounding both ends costs nothing in
+  the common case (sane minutes-to-months range) and rejects two
+  realistic typo classes.
+- **Fix outline:** when TTL is enabled, reject `ttl_seconds` outside
+  `[AGENTMEMORY_MIN_TTL_SECONDS, AGENTMEMORY_MAX_TTL_SECONDS]` (defaults
+  60 and 365 * 24 * 3600). For `expires_at`, reject timestamps further
+  than `AGENTMEMORY_MAX_TTL_SECONDS` in the future, and refuse
+  timestamps in the past (those are dead-on-arrival, an obvious caller
+  bug).
+- **Where:**
+  - `agentmemory/runtime/lifecycle.py::resolve_expires_at` — extend the
+    existing validation block.
+  - `.env.example` — document the two new bounds.
+  - `tests/test_observability_lifecycle.py` — assert each bound.
+  - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md)
+    §2 P5 mitigation 2.
+
+---
+
+## 44. Sweeper soft-deletes via `archived` flag, with a delayed hard-delete pass
+
+- **Priority:** P2
+- **Status:** open
+- **Severity:** data-retention
+- **Why:** Today the sweeper hard-deletes expired records by calling
+  `delete_memory`. That is irrecoverable: even a clean restore from
+  the data-volume backup does not revive the record, because
+  `expires_at` is still in the past and the read path filters it. A
+  two-stage cleanup gives a recovery window: stage 1 sets
+  `metadata.archived: true` plus `archived_reason: "ttl_expired"` and
+  `archived_at: <iso>` (read paths already filter archived records);
+  stage 2 hard-deletes records that have been archived for longer than
+  `AGENTMEMORY_TTL_RECOVERY_DAYS` (default 30). An operator who notices
+  unexpected disappearance has 30 days to flip `archived: false` and
+  bring records back.
+- **Fix outline:**
+  - `agentmemory/runtime/lifecycle.py::run_sweep_once` — replace the
+    `delete_memory(id)` call with a softer
+    `update_memory(id, metadata={archived: True, archived_reason:
+    "ttl_expired", archived_at: utc_now()})`.
+  - Add `_hard_delete_archived_older_than` helper called on a slower
+    interval (or piggybacked on the same sweep with a separate
+    threshold check).
+  - Make the recovery window configurable. Setting it to 0 reproduces
+    today's behavior (no soft-delete window).
+  - Coordinate with item 28 ("Admin memory views bypass runtime TTL
+    filtering") — admin views should keep showing the archived
+    records so an operator can browse and revive them.
+  - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md)
+    §2 P5 mitigation 3.
+
+---
+
+## 45. Surface a signal when the sweeper deletes records
+
+- **Priority:** P3
+- **Status:** open
+- **Severity:** hygiene
+- **Why:** The sweeper deletes silently. With items 42-44 in place
+  most of the harm is gone, but operators still benefit from a signal
+  when a meaningful number of records disappear in a single sweep —
+  it would have caught the "bot started passing TTL by mistake"
+  scenario much earlier than a user noticing missing data weeks
+  later.
+- **Fix outline:** at the end of a sweep cycle, write one structured
+  log line per non-empty cycle: count of soft-deleted (or hard-
+  deleted) ids, the providers they belonged to, and an indication of
+  whether the count exceeds an alert threshold
+  (`AGENTMEMORY_SWEEPER_ALERT_THRESHOLD`, default 10). Optionally
+  invoke a configurable webhook (healthchecks.io fail URL, generic
+  POST) when the threshold is exceeded, so the dead-man monitoring
+  from item 36 can route an alert.
+- **Where:**
+  - `agentmemory/runtime/lifecycle.py::run_sweep_once` — add the
+    summary log and the optional webhook call.
+  - `agentmemory/runtime/metrics.py` — add a counter for sweep
+    deletions if metrics infrastructure has a home for it.
+  - `.env.example` — document the threshold and webhook env vars.
+  - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md)
+    §2 P5 mitigation 4.
 
 ---
 
