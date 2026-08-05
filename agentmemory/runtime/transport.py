@@ -9,6 +9,7 @@ from agentmemory.providers.base import (
     ProviderCapabilities,
     ProviderConfigurationError,
     ProviderError,
+    ProviderIdentityError,
     ProviderScopeRequiredError,
     ProviderUnavailableError,
     ProviderValidationError,
@@ -19,6 +20,7 @@ from agentmemory.providers.base import (
 ERROR_TYPE_MAP: dict[str, type[ProviderError]] = {
     "MemoryNotFoundError": MemoryNotFoundError,
     "ProviderConfigurationError": ProviderConfigurationError,
+    "ProviderIdentityError": ProviderIdentityError,
     "ProviderCapabilityError": ProviderCapabilityError,
     "ProviderScopeRequiredError": ProviderScopeRequiredError,
     "ProviderUnavailableError": ProviderUnavailableError,
@@ -166,6 +168,10 @@ def execute_transport_operation(
 def provider_error_status(exc: ProviderError) -> int:
     if isinstance(exc, MemoryNotFoundError):
         return 404
+    # Authenticated but not entitled to this scope: 403, not 400. The request is
+    # well-formed; retrying it unchanged with the same credential cannot succeed.
+    if isinstance(exc, ProviderIdentityError):
+        return 403
     if isinstance(exc, (ProviderConfigurationError, ProviderUnavailableError)):
         return 503
     if isinstance(exc, (ProviderValidationError, ProviderScopeRequiredError, ProviderCapabilityError)):

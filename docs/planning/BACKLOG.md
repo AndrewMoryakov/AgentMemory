@@ -13,7 +13,8 @@ Format per entry:
 
 Current priority index:
 
-- **P1 open:** items 36 (dead-man backup ping), 37 (auth-derived user_id)
+- **P1 open:** item 36 (dead-man backup ping)
+- **P1 closed:** item 37 (auth-derived user_id — opt-in enforcement)
 - **P1 closed:** item 42 (TTL off by default — commit c89cc6f)
 - **P2 open:** items 38 (memory_type filter), 40 (infer=true content-loss
   warning), 43 (sanity-guard TTL values when enabled), 44 (sweeper soft
@@ -974,7 +975,7 @@ documentation rather than runtime code.
 ## 37. Derive `user_id` from auth context instead of accepting it from payload
 
 - **Priority:** P1
-- **Status:** open
+- **Status:** closed
 - **Severity:** security
 - **Why:** The current model accepts `user_id`, `agent_id`, and `run_id`
   directly from the request body. The bearer token / OAuth flow gates the
@@ -1001,6 +1002,25 @@ documentation rather than runtime code.
     the env flag is set and a claim is present, reject payloads where
     `source["user_id"]` differs from the claim.
   - Context: [`SESSION_REVIEW_2026-05-29.md`](SESSION_REVIEW_2026-05-29.md) §3 F3.
+- **Resolution:** `AGENTMEMORY_ENFORCE_AUTH_USER_ID=1`, documented in
+  [`docs/AUTH_IDENTITY_BINDING.md`](../AUTH_IDENTITY_BINDING.md). The binding is
+  stamped on the auth code, carried into the token pair, and preserved across
+  refresh rotation; unbound credentials (static API token, tokens issued before a
+  binding was configured) keep their previous behaviour.
+- **Where it actually landed, and why it differs from the outline above:** the
+  outline proposed the check in `_execute_add` "and friends". It went instead
+  into the wrapper `OperationSpec.__post_init__` installs around every operation,
+  because HTTP, MCP and CLI all dispatch through that one call — a per-operation
+  check is a list that the next operation is added without. `get`/`update`/
+  `delete` carry no scope, so they resolve the stored record's own `user_id`
+  first. New shared module: `agentmemory/runtime/identity.py`. New typed error:
+  `ProviderIdentityError` → HTTP 403, same `error_type` over MCP.
+- **Deliberately not done:** the outline also proposed surfacing the claim under
+  `/.well-known/oauth-protected-resource` and on `memory_health` for client
+  introspection. That is useful and remains open as a smaller follow-up; it is
+  not needed for enforcement and was left out rather than widened into scope.
+  `agent_id` and `run_id` remain unbound — no evidenced requirement, and binding
+  them would break multi-agent use under one identity.
 
 ---
 

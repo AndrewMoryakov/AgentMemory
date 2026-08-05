@@ -21,6 +21,23 @@ The format is intentionally simple during public alpha.
 
 ### Added
 
+- **Opt-in binding of `user_id` to the authenticated identity**
+  (`AGENTMEMORY_ENFORCE_AUTH_USER_ID=1`). Until now `user_id` came from the
+  request payload, so any valid credential could name any scope and read or write
+  another user's memory — harmless with one owner, a cross-user leak with two.
+  An OAuth access token can now carry a `bound_user_id`, stamped from the
+  client's configuration at authorize time and preserved across refresh rotation.
+  With the mode on and a bound credential, a matching `user_id` passes, a missing
+  one is filled in from the credential, and a differing one is refused with the
+  new typed `ProviderIdentityError` (HTTP 403, same `error_type` over MCP).
+  `get`/`update`/`delete` carry no scope, so the stored record's own `user_id` is
+  checked instead. The check sits in the single wrapper every operation is
+  dispatched through, so HTTP, MCP and CLI are covered by one implementation.
+  Off by default; credentials with no bound identity — including static
+  `AGENTMEMORY_API_TOKEN` — keep their existing behaviour even when the mode is
+  on, so upgrades do not break single-owner installs. Closes backlog item #37.
+  The boundary of what this does and does not guarantee — it is not tenant
+  isolation — is in `docs/AUTH_IDENTITY_BINDING.md`.
 - `memory_add` now surfaces all records when the provider produces a fan-out from a single call (e.g. mem0 with `infer=true` splitting input into multiple extracted facts). The primary record is returned as before; the remaining writes are exposed verbatim under `additional_records` on the primary, each a full `MemoryRecord` with its own id and metadata. The mem0 adapter also syncs every fan-out id to the scope registry so `list_scopes` counts and the TTL sweeper see them.
 - OAuth 2.1 Dynamic Client Registration (RFC 7591). Remote MCP clients (Claude.ai, ChatGPT Custom Connectors) can now self-register against `POST /register`; discovery at `/.well-known/oauth-authorization-server` advertises `registration_endpoint`. Registered clients persist to `{runtime_dir}/oauth_clients.json` with SHA-256 hashed secrets, FIFO eviction at 10 000 entries
 - Persistent OAuth token store at `{runtime_dir}/oauth_tokens.json`. Authorization codes and access tokens now survive container restarts — remote MCP clients no longer get silently logged out on redeploy

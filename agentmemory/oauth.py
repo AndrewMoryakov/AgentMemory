@@ -114,6 +114,7 @@ def static_client_record() -> dict[str, Any] | None:
         "client_name": "AgentMemory static client",
         "scope": "mcp",
         "registration_origin": "static",
+        "bound_user_id": os.environ.get("AGENTMEMORY_OAUTH_BOUND_USER_ID", "").strip() or None,
     }
 
 
@@ -159,6 +160,22 @@ def lookup_client(client_id: str) -> dict[str, Any] | None:
     if record is None:
         return None
     return dict(record)
+
+
+def bound_user_id_for_client(client_id: str) -> str | None:
+    """The user_id tokens for this client should be bound to, if any.
+
+    AgentMemory has no login: the authorize endpoint cannot learn who the human
+    is, and a `bound_user_id` supplied in the request would be chosen by the very
+    client the binding is meant to constrain. So the binding is configuration —
+    `AGENTMEMORY_OAUTH_BOUND_USER_ID` for the static client, or a `bound_user_id`
+    field written into a registered client's record out of band.
+    """
+    record = lookup_client(client_id)
+    if record is None:
+        return None
+    value = record.get("bound_user_id")
+    return value.strip() or None if isinstance(value, str) else None
 
 
 def verify_client_secret(client_id: str, presented: str | None) -> bool:
@@ -291,6 +308,7 @@ def issue_auth_code(
     code_challenge_method: str,
     scope: str | None = None,
     resource: str | None = None,
+    bound_user_id: str | None = None,
 ) -> str:
     code = secrets.token_urlsafe(32)
     with _LOCK:
@@ -303,6 +321,7 @@ def issue_auth_code(
             "code_challenge_method": (code_challenge_method or "S256").upper(),
             "scope": scope,
             "resource": resource,
+            "bound_user_id": bound_user_id,
             "expires_at": _now() + AUTH_CODE_TTL_SECONDS,
         }
         _save_token_store()
@@ -345,7 +364,7 @@ def _verify_pkce(challenge: str, method: str, verifier: str) -> bool:
     return False
 
 
-def issue_access_token(*, client_id: str, scope: str | None = None) -> tuple[str, int]:
+def issue_access_token(*, client_id: str, scope: str | None = None, bound_user_id: str | None = None) -> tuple[str, int]:
     """Issue an access token only. Prefer issue_token_pair for new callers
     so the client also gets a refresh token. Retained for any external
     integration that does not want refresh semantics."""
@@ -355,13 +374,14 @@ def issue_access_token(*, client_id: str, scope: str | None = None) -> tuple[str
         _ACCESS_TOKENS[token] = {
             "client_id": client_id,
             "scope": scope,
+            "bound_user_id": bound_user_id,
             "expires_at": _now() + ACCESS_TOKEN_TTL_SECONDS,
         }
         _save_token_store()
     return token, ACCESS_TOKEN_TTL_SECONDS
 
 
-def issue_token_pair(*, client_id: str, scope: str | None = None) -> dict[str, Any]:
+def issue_token_pair(*, client_id: str, scope: str | None = None, bound_user_id: str | None = None) -> dict[str, Any]:
     """Issue an access + refresh token pair bound to client_id.
 
     Returns a dict with access_token, refresh_token, access_expires_in,
@@ -375,11 +395,13 @@ def issue_token_pair(*, client_id: str, scope: str | None = None) -> dict[str, A
         _ACCESS_TOKENS[access] = {
             "client_id": client_id,
             "scope": scope,
+            "bound_user_id": bound_user_id,
             "expires_at": now + ACCESS_TOKEN_TTL_SECONDS,
         }
         _REFRESH_TOKENS[refresh] = {
             "client_id": client_id,
             "scope": scope,
+            "bound_user_id": bound_user_id,
             "expires_at": now + REFRESH_TOKEN_TTL_SECONDS,
         }
         _save_token_store()
@@ -413,6 +435,10 @@ def consume_refresh_token(*, refresh_token: str, client_id: str) -> dict[str, An
             _REFRESH_TOKENS[refresh_token] = entry
             return None
         scope = entry.get("scope")
+        # The binding survives rotation. If it did not, a client could shed its
+        # bound identity simply by refreshing, which would make the whole check
+        # bypassable by anyone who waited out one token lifetime.
+        bound_user_id = entry.get("bound_user_id")
         # Rotate: mint a brand new pair (issue_token_pair would re-acquire
         # the lock, so inline the mint with the lock already held).
         access = secrets.token_urlsafe(32)
@@ -421,11 +447,13 @@ def consume_refresh_token(*, refresh_token: str, client_id: str) -> dict[str, An
         _ACCESS_TOKENS[access] = {
             "client_id": client_id,
             "scope": scope,
+            "bound_user_id": bound_user_id,
             "expires_at": now + ACCESS_TOKEN_TTL_SECONDS,
         }
         _REFRESH_TOKENS[new_refresh] = {
             "client_id": client_id,
             "scope": scope,
+            "bound_user_id": bound_user_id,
             "expires_at": now + REFRESH_TOKEN_TTL_SECONDS,
         }
         _save_token_store()
@@ -436,6 +464,25 @@ def consume_refresh_token(*, refresh_token: str, client_id: str) -> dict[str, An
         "refresh_expires_in": REFRESH_TOKEN_TTL_SECONDS,
         "scope": scope,
     }
+
+
+def access_token_bound_user_id(token: str) -> str | None:
+    """The identity a live access token is bound to, or None.
+
+    None covers both "no such token" and "token carries no binding"; callers
+    establish validity with validate_access_token first.
+    """
+    if not token:
+        return None
+    with _LOCK:
+        _ensure_tokens_loaded()
+        if _purge_expired():
+            _save_token_store()
+        entry = _ACCESS_TOKENS.get(token)
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get("bound_user_id")
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def validate_access_token(token: str) -> bool:

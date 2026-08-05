@@ -21,6 +21,11 @@ Instead:
 - local-first by design
 - not positioned as a hosted multi-tenant service
 - auth and remote exposure should be treated cautiously
+- `user_id` is taken from the request payload by default, so any valid credential
+  can name any scope. `AGENTMEMORY_ENFORCE_AUTH_USER_ID=1` binds the scope to the
+  identity the credential was issued for — see
+  [docs/AUTH_IDENTITY_BINDING.md](docs/AUTH_IDENTITY_BINDING.md), including what
+  that mode does *not* guarantee
 
 ## Out Of Scope For Public Claims
 
