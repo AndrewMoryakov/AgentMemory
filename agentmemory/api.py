@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from agentmemory import mcp as mcp_server
 from agentmemory import oauth as oauth_state
+from agentmemory.runtime.identity import AuthIdentity, set_identity
 from agentmemory.runtime.admin import (
     admin_stats,
     delete_admin_memory,
@@ -247,6 +248,22 @@ class Handler(BaseHTTPRequestHandler):
             return presented
         return None
 
+    def _bind_identity(self) -> None:
+        """Publish the identity of the presented credential for this request.
+
+        Called from _require_auth, which every guarded route already goes
+        through. Always sets a value — including the anonymous one — because the
+        handler instance is reused across keep-alive requests on a connection,
+        and a leftover identity would otherwise apply to the next caller.
+        """
+        presented = self._presented_bearer()
+        identity = None
+        if presented is not None and oauth_state.oauth_enabled():
+            bound = oauth_state.access_token_bound_user_id(presented)
+            if bound is not None:
+                identity = AuthIdentity(bound_user_id=bound, source="oauth")
+        set_identity(identity)
+
     def _is_authorized(self) -> bool:
         expected = _configured_token()
         oauth_on = oauth_state.oauth_enabled()
@@ -279,7 +296,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _require_auth(self) -> bool:
         if self._is_authorized():
+            self._bind_identity()
             return True
+        set_identity(None)
         try:
             self.send_response(401)
             if oauth_state.oauth_enabled():
@@ -377,6 +396,9 @@ class Handler(BaseHTTPRequestHandler):
             code_challenge_method=code_challenge_method,
             scope=scope,
             resource=resource,
+            # Taken from the client's configuration, never from the request: a
+            # binding the caller could name would constrain nobody.
+            bound_user_id=oauth_state.bound_user_id_for_client(given_client_id),
         )
 
         sep = "&" if "?" in redirect_uri else "?"
@@ -489,7 +511,11 @@ class Handler(BaseHTTPRequestHandler):
             if entry is None:
                 self._send(400, {"error": "invalid_grant"})
                 return
-            issued = oauth_state.issue_token_pair(client_id=given_client_id, scope=entry.get("scope"))
+            issued = oauth_state.issue_token_pair(
+                client_id=given_client_id,
+                scope=entry.get("scope"),
+                bound_user_id=entry.get("bound_user_id"),
+            )
             self._send(200, self._token_response_body(issued))
             return
 

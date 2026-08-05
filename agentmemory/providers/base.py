@@ -32,6 +32,16 @@ class ProviderValidationError(ProviderError):
     pass
 
 
+class ProviderIdentityError(ProviderError):
+    """The request's scope does not match the identity its credential is bound to.
+
+    Distinct from ProviderValidationError because the request is well-formed:
+    it is refused on authorization grounds, and so maps to 403 rather than 400.
+    """
+
+    pass
+
+
 def provider_error_payload(exc: ProviderError) -> dict[str, Any]:
     return {
         "error_type": exc.__class__.__name__,

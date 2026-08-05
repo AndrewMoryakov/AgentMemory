@@ -33,6 +33,7 @@ from agentmemory.runtime.config import (
     memory_search_page,
     memory_update,
 )
+from agentmemory.runtime import identity as identity_module
 from agentmemory.runtime import lifecycle as lifecycle_module
 from agentmemory.runtime import metrics as metrics_registry
 from agentmemory.runtime import portability as portability_module
@@ -67,7 +68,11 @@ class OperationSpec:
 
         def _instrumented(source: dict[str, Any]) -> Any:
             with metrics_registry.timed(name):
-                return raw(source)
+                # The one place scope binding is applied. Every transport — HTTP,
+                # MCP, CLI — reaches the provider through this call, so a check
+                # here cannot be skipped by adding a fourth one later. It runs
+                # before the handler so a refused request never touches storage.
+                return raw(identity_module.enforce_scope(name, source))
 
         self.execute = _instrumented
 
@@ -435,12 +440,47 @@ def _attach_stale_warnings(value: Any) -> Any:
     return value
 
 
+def _guard_record_scope(operation_name: str, memory_id: str) -> None:
+    """Refuse a by-id operation on a record outside the credential's identity.
+
+    `get`, `update` and `delete` carry no scope in their payload, so the record
+    has to be read to learn whose it is. That read costs one extra provider round
+    trip, which is why it only happens when enforcement is actually in force —
+    `enforce_record_scope` is a no-op otherwise, and this returns before the
+    fetch.
+
+    A record that has already vanished is left to the normal path, so a
+    concurrent delete still reports MemoryNotFoundError (or, for delete, its
+    idempotent already-absent shape) rather than an identity error.
+    """
+    if not identity_module.enforcement_enabled():
+        return
+    if identity_module.current_identity().bound_user_id is None:
+        return
+    try:
+        record = execute_transport_operation(
+            use_proxy=should_proxy_to_api(),
+            local_call=lambda: memory_get(memory_id),
+            proxy_call=lambda: proxy_get(memory_id),
+        )
+    except MemoryNotFoundError:
+        return
+    identity_module.enforce_record_scope(
+        operation_name,
+        record.get("user_id") if isinstance(record, dict) else None,
+    )
+
+
 def _execute_get(source: dict[str, Any]) -> Any:
     memory_id = source["memory_id"]
     result = execute_transport_operation(
         use_proxy=should_proxy_to_api(),
         local_call=lambda: memory_get(memory_id),
         proxy_call=lambda: proxy_get(memory_id),
+    )
+    identity_module.enforce_record_scope(
+        "get",
+        result.get("user_id") if isinstance(result, dict) else None,
     )
     if isinstance(result, dict) and lifecycle_module.is_expired(result):
         # Treat expired records as if the sweeper already removed them: the
@@ -450,6 +490,7 @@ def _execute_get(source: dict[str, Any]) -> Any:
 
 
 def _execute_update(source: dict[str, Any]) -> Any:
+    _guard_record_scope("update", source["memory_id"])
     validate_update_request(provider_name=active_provider_name(), capabilities=active_provider_capabilities())
     kwargs = {
         "memory_id": source["memory_id"],
@@ -464,6 +505,7 @@ def _execute_update(source: dict[str, Any]) -> Any:
 
 
 def _execute_delete(source: dict[str, Any]) -> Any:
+    _guard_record_scope("delete", source["memory_id"])
     validate_delete_request(provider_name=active_provider_name(), capabilities=active_provider_capabilities())
     memory_id = source["memory_id"]
     try:
