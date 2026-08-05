@@ -13,7 +13,7 @@ Format per entry:
 
 Current priority index:
 
-- **P1 open:** item 36 (dead-man backup ping)
+- **P1 open:** items 36 (dead-man backup ping), 51 (identity for DCR-created clients)
 - **P1 closed:** item 37 (auth-derived user_id — opt-in enforcement)
 - **P1 closed:** item 42 (TTL off by default — commit c89cc6f)
 - **P2 open:** items 38 (memory_type filter), 40 (infer=true content-loss
@@ -1544,3 +1544,47 @@ documentation rather than runtime code.
   `stored_text` when `infer=true` differs.
 - **DEFECT-05** — mem0 contract advertising sentinels: fixed in
   `Mem0Provider.provider_contract` and `BaseMemoryProvider.provider_contract`.
+
+
+---
+
+## 51. Decide whether DCR-created OAuth clients must receive a bound identity
+
+- **Priority:** P1
+- **Status:** open
+- **Severity:** security-policy
+- **Why:** `AGENTMEMORY_ENFORCE_AUTH_USER_ID=1` (item 37) binds a request's scope
+  to the identity its credential was issued for — but only for credentials that
+  carry a binding. Credentials without one are exempt by design, which is what
+  keeps existing single-owner installs working across the upgrade. Dynamic client
+  registration is on by default and `/oauth/authorize` approves without a login or
+  a consent step, so anyone reachable by the endpoint can register a client and
+  receive an **unbound** token. An unbound token is exempt. The mode is therefore
+  void unless `AGENTMEMORY_OAUTH_DISABLE_DCR=1` and every client carries a
+  binding.
+
+  Reproduced end-to-end on 2026-08-05: anonymous `POST /register` → 201,
+  `GET /oauth/authorize` → 302 with a code, `POST /oauth/token` → 200 with
+  `bound_user_id: None`, then `POST /add {"user_id": "someone-else"}` → 200 and the
+  record was written under that id.
+
+  **This is not a defect in the item 37 implementation.** The exemption is
+  deliberate and documented. What is undecided is the policy, and it should be
+  decided rather than left as an interaction between two defaults that each look
+  reasonable alone.
+
+- **Options, none obviously right:**
+  1. Disable DCR by default. Breaks self-registering remote MCP clients
+     (Claude.ai, ChatGPT connectors), which is why it is on.
+  2. Require a login or consent step at `/oauth/authorize`, so there is a person
+     to bind to. This is the honest fix and the largest one: AgentMemory would
+     acquire an end-user identity concept it does not have today.
+  3. Assign an identity at authorize time from operator configuration, refusing to
+     issue tokens to clients with no configured binding while the mode is on.
+  4. Keep the single-owner trust model explicitly, and state in the docs that the
+     mode defends against a careless client rather than a hostile one.
+
+- **Do not** resolve this by describing the current state as full cross-user
+  isolation. `docs/AUTH_IDENTITY_BINDING.md` already says it is not; that wording
+  should survive whatever is decided here.
+- **Related:** item 37 (closed), commit `2ddd6d4`.
