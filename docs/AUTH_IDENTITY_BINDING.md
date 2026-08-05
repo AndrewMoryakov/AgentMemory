@@ -32,10 +32,25 @@ Filling in the absent case is deliberate: a client should not have to repeat wha
 its token already states, and requiring it would push every caller into sending a
 field they cannot be trusted with.
 
-The check covers `add`, `search`, `search_page`, `list`, `list_page`, `reconcile`
-and `export`. `get`, `update` and `delete` name a record by id and carry no scope,
+The check covers `add`, `search`, `search_page`, `list`, `list_page` and
+`reconcile`. `get`, `update` and `delete` name a record by id and carry no scope,
 so the record is read first and its own `user_id` is checked. Blocking writes
 alone would leave reads open, and reads are the half that leaks.
+
+The classification is total, and unclassified means refused. `list_scopes`,
+`list_scopes_page`, `export` and `import` name no `user_id` and are not addressed
+by record id — they range over the whole store — so a bound credential is refused
+them outright rather than passed through for want of a listing. `health` is the
+one explicit exemption, because it touches no user data. An operation added later
+is refused until it is classified.
+
+`/admin/*` is refused to a bound credential for the same reason. Those routes do
+not dispatch through `OPERATIONS` — they call `runtime.admin`, which reaches the
+provider directly — and there is no separate operator credential, so the same
+bearer that reaches `/add` reaches `/admin/memories/<id>`. The admin surface is
+built for an operator who is meant to see everything; scoping it to one identity
+would be a second implementation of this check, so under enforcement a bound
+credential simply does not get it.
 
 It lives in one place — the wrapper `OperationSpec.__post_init__` installs around
 every operation — because HTTP, MCP and CLI all dispatch through it. A per
@@ -64,7 +79,8 @@ dropped it, shedding the binding would cost one refresh call.
 
 ## What keeps working unchanged
 
-- **Enforcement off** — the default. Nothing is checked, nothing is filled in.
+- **Enforcement off** — the default. Nothing is checked, nothing is filled in,
+  and `/admin/*`, `list_scopes`, `export` and `import` behave exactly as before.
 - **A credential with no bound identity** — a static `AGENTMEMORY_API_TOKEN`, or an
   OAuth token issued before a binding was configured. It behaves exactly as
   before even with the flag on. Enforcing on unbound credentials would break
@@ -82,6 +98,16 @@ offering it. Specifically:
 - A binding is only as trustworthy as whatever issued the token. AgentMemory
   cannot verify that the operator's configured `bound_user_id` corresponds to a
   real person, because it never sees one.
+- **The mode is void unless every route to a token is bound.** Dynamic client
+  registration is enabled by default and `/oauth/authorize` auto-approves, so
+  anyone who can reach the server can register a client and mint a token that
+  carries no binding — and unbound credentials are exempt by design. Turning this
+  mode on is only meaningful together with `AGENTMEMORY_OAUTH_DISABLE_DCR=1` and
+  a binding configured for every client that can obtain a token.
+- In owner-process proxy mode the check runs in the process that received the
+  request, and the proxy forwards under the owner's own (unbound) credential. The
+  flag must therefore be set on the process clients talk to; setting it only on
+  the owner process enforces nothing.
 - Anyone who can read the token store can mint or edit bindings.
 - `agent_id` and `run_id` are **not** bound. Requirement stated and deliberately
   not met: no evidenced need for it exists yet, and binding them would break

@@ -20,6 +20,7 @@ from unittest import mock
 
 import agentmemory.api as agentmemory_api
 import agentmemory.mcp as agentmemory_mcp
+import agentmemory.runtime.admin as admin_module
 import agentmemory.runtime.operations as ops
 from agentmemory import oauth as oauth_state
 from agentmemory.providers.base import ProviderIdentityError
@@ -414,6 +415,269 @@ class HttpRequestBindsTheCredentialIdentity(unittest.TestCase):
         anonymous.end_headers = lambda *a, **k: None
         self.assertFalse(anonymous._require_auth())
         self.assertIsNone(current_identity().bound_user_id)
+
+
+class ScopeInventoryAndPortabilityAreNotAWayAround(IdentityBindingTestCase):
+    """Operations the enforced set never classified.
+
+    `list_scopes` names no `user_id`, so `enforce_scope` waved it through and it
+    returned the inventory of every scope in the store — the other users' ids
+    themselves. `import` names no `user_id` either, and then replays a file whose
+    records each carry their own, straight into `memory_add`. `export` was in the
+    scoped set but ignores `user_id` entirely: it walks the whole inventory.
+
+    So the classification is now total. An operation that is neither scoped by
+    payload nor addressed by record id is refused under a bound identity, rather
+    than passed through because nobody listed it.
+    """
+
+    def test_list_scopes_does_not_hand_over_the_other_users_ids(self) -> None:
+        with mock.patch.object(
+            ops, "memory_list_scopes",
+            return_value={"items": [{"kind": "user", "value": OWNER}, {"kind": "user", "value": OTHER}]},
+        ) as inventory:
+            with self.assertRaises(ProviderIdentityError):
+                self.execute("list_scopes", {})
+            inventory.assert_not_called()
+
+    def test_list_scopes_page_is_refused_too(self) -> None:
+        with mock.patch.object(
+            ops, "memory_list_scopes_page", return_value={"items": [], "next_cursor": None}
+        ) as inventory:
+            with self.assertRaises(ProviderIdentityError):
+                self.execute("list_scopes_page", {})
+            inventory.assert_not_called()
+
+    def test_import_cannot_plant_a_record_under_another_user(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "in.jsonl"
+            source.write_text(
+                json.dumps({"memory": "planted", "user_id": OTHER}) + "\n", encoding="utf-8"
+            )
+            with self.assertRaises(ProviderIdentityError):
+                self.execute("import", {"path": str(source)})
+        self.assertEqual(
+            [entry for entry in self.captured if entry["operation"] == "add"],
+            [],
+            "a refused import must not reach the provider",
+        )
+
+    def test_export_does_not_walk_the_other_users_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "dump.jsonl"
+            with mock.patch.object(
+                ops, "memory_list_scopes_page", return_value={"items": [], "next_cursor": None}
+            ) as inventory:
+                with self.assertRaises(ProviderIdentityError):
+                    self.execute("export", {"path": str(target)})
+                inventory.assert_not_called()
+            self.assertFalse(target.exists())
+
+    def test_health_is_still_reachable(self) -> None:
+        with mock.patch.object(ops, "health", return_value={"ok": True}):
+            self.assertEqual(self.execute("health", {}), {"ok": True})
+
+
+class UnclassifiedOperationsStayOpenWithoutABinding(IdentityBindingTestCase):
+    """The same operations under a credential that carries no identity. The
+    default-deny must not reach installs that never opted into a binding."""
+
+    bound_user_id = None
+
+    def test_list_scopes_still_works_for_an_unbound_credential(self) -> None:
+        with mock.patch.object(ops, "memory_list_scopes", return_value={"items": []}) as inventory:
+            self.execute("list_scopes", {})
+            inventory.assert_called_once()
+
+
+class UnclassifiedOperationsStayOpenWithEnforcementOff(IdentityBindingTestCase):
+    enforce = False
+
+    def test_list_scopes_still_works_with_the_flag_off(self) -> None:
+        with mock.patch.object(ops, "memory_list_scopes", return_value={"items": []}) as inventory:
+            self.execute("list_scopes", {})
+            inventory.assert_called_once()
+
+
+class AdminSurfaceIsNotAWayAround(unittest.TestCase):
+    """`/admin/*` reaches the provider without OPERATIONS.
+
+    `_require_auth` guards those routes, so the binding is published — but the
+    handlers call `runtime.admin`, which calls `memory_get`/`memory_update`/
+    `memory_delete`/`memory_list` directly. The wrapper the whole design rests on
+    is never entered, so a token bound to OWNER could read, edit and delete
+    OTHER's records by naming them. There is no separate admin credential: the
+    same bearer that reaches `/add` reaches `/admin/memories/<id>`.
+    """
+
+    def setUp(self) -> None:
+        self._original_env = {key: os.environ.get(key) for key in ENV_KEYS}
+        self._temp = tempfile.TemporaryDirectory()
+        temp = Path(self._temp.name)
+        os.environ["AGENTMEMORY_OAUTH_STORE"] = str(temp / "clients.json")
+        os.environ["AGENTMEMORY_OAUTH_TOKEN_STORE"] = str(temp / "tokens.json")
+        os.environ["AGENTMEMORY_OAUTH_CLIENT_ID"] = "static-client"
+        os.environ["AGENTMEMORY_OAUTH_CLIENT_SECRET"] = "static-secret"
+        os.environ["AGENTMEMORY_OAUTH_BOUND_USER_ID"] = OWNER
+        os.environ["AGENTMEMORY_ENFORCE_AUTH_USER_ID"] = "1"
+        oauth_state.reset_client_registry_for_tests()
+        agentmemory_api._RATE_LIMITER.reset()
+        self.token = oauth_state.issue_token_pair(client_id="static-client", bound_user_id=OWNER)["access_token"]
+
+        self.other_record = {"id": "other-1", "memory": "not yours", "user_id": OTHER}
+        self._patches = [
+            mock.patch.object(admin_module, "memory_list", return_value=[dict(self.other_record)]),
+            mock.patch.object(admin_module, "memory_search", return_value=[dict(self.other_record)]),
+            mock.patch.object(admin_module, "memory_get", return_value=dict(self.other_record)),
+            mock.patch.object(admin_module, "memory_update", return_value={"ok": True}),
+            mock.patch.object(admin_module, "memory_delete", return_value={"deleted": True}),
+            mock.patch.object(admin_module, "active_provider_name", return_value="fake"),
+            mock.patch.object(admin_module, "active_provider_capabilities", return_value=_capabilities()),
+            mock.patch.object(admin_module, "admin_state_path", return_value=temp / "admin-state.json"),
+        ]
+        self.provider = {patch.attribute: patch.start() for patch in self._patches}
+
+    def tearDown(self) -> None:
+        for patch in reversed(self._patches):
+            patch.stop()
+        oauth_state.reset_client_registry_for_tests()
+        agentmemory_api._RATE_LIMITER.reset()
+        self._temp.cleanup()
+        for key, value in self._original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _request(self, method: str, path: str, payload: dict | None = None):
+        body = json.dumps(payload or {}).encode("utf-8")
+        handler = make_handler(
+            path=path,
+            method=method,
+            body=body,
+            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+        )
+        captured: dict = {}
+
+        def _send(status, obj, headers=None):
+            captured["status"] = status
+            captured["body"] = obj
+
+        handler._send = _send
+        getattr(handler, f"do_{method}")()
+        return captured.get("status"), captured.get("body")
+
+    def _assert_refused(self, status, body) -> None:
+        self.assertEqual(status, 403)
+        self.assertEqual(body["error_type"], "ProviderIdentityError")
+
+    def test_admin_list_cannot_read_another_users_scope(self) -> None:
+        self._assert_refused(*self._request("GET", f"/admin/memories?user_id={OTHER}"))
+        self.provider["memory_list"].assert_not_called()
+        self.provider["memory_search"].assert_not_called()
+
+    def test_admin_get_cannot_read_another_users_record(self) -> None:
+        self._assert_refused(*self._request("GET", "/admin/memories/other-1"))
+        self.provider["memory_get"].assert_not_called()
+
+    def test_admin_patch_cannot_edit_another_users_record(self) -> None:
+        self._assert_refused(*self._request("PATCH", "/admin/memories/other-1", {"memory": "overwritten"}))
+        self.provider["memory_update"].assert_not_called()
+
+    def test_admin_delete_cannot_remove_another_users_record(self) -> None:
+        self._assert_refused(*self._request("DELETE", "/admin/memories/other-1"))
+        self.provider["memory_delete"].assert_not_called()
+
+    def test_admin_pin_cannot_touch_another_users_record(self) -> None:
+        self._assert_refused(*self._request("POST", "/admin/memories/other-1/pin", {"pinned": True}))
+
+    def test_admin_stats_is_refused(self) -> None:
+        self._assert_refused(*self._request("GET", "/admin/stats"))
+
+    def test_admin_scopes_is_refused(self) -> None:
+        self._assert_refused(*self._request("GET", "/admin/scopes"))
+
+    def test_the_ordinary_route_still_works_for_the_bound_user(self) -> None:
+        with mock.patch.object(ops, "should_proxy_to_api", return_value=False), \
+             mock.patch.object(ops, "memory_add", return_value={"id": "m"}) as add:
+            status, _ = self._request("POST", "/add", {"text": "hello"})
+        self.assertEqual(status, 200)
+        self.assertEqual(add.call_args.kwargs["user_id"], OWNER)
+
+
+class AdminSurfaceIsUntouchedWithoutABinding(AdminSurfaceIsNotAWayAround):
+    """An unbound credential — the operator's static token, or any install that
+    never configured a binding — keeps the admin surface it had."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # A token from the same client but carrying no binding.
+        self.token = oauth_state.issue_token_pair(client_id="static-client")["access_token"]
+
+    def test_admin_list_cannot_read_another_users_scope(self) -> None:
+        status, _ = self._request("GET", f"/admin/memories?user_id={OTHER}")
+        self.assertEqual(status, 200)
+        self.provider["memory_list"].assert_called_once()
+
+    def test_admin_get_cannot_read_another_users_record(self) -> None:
+        status, body = self._request("GET", "/admin/memories/other-1")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["id"], "other-1")
+
+    def test_admin_patch_cannot_edit_another_users_record(self) -> None:
+        status, _ = self._request("PATCH", "/admin/memories/other-1", {"memory": "overwritten"})
+        self.assertEqual(status, 200)
+        self.provider["memory_update"].assert_called_once()
+
+    def test_admin_delete_cannot_remove_another_users_record(self) -> None:
+        status, _ = self._request("DELETE", "/admin/memories/other-1")
+        self.assertEqual(status, 200)
+        self.provider["memory_delete"].assert_called_once()
+
+    def test_admin_pin_cannot_touch_another_users_record(self) -> None:
+        status, _ = self._request("POST", "/admin/memories/other-1/pin", {"pinned": True})
+        self.assertEqual(status, 200)
+
+    def test_admin_stats_is_refused(self) -> None:
+        status, _ = self._request("GET", "/admin/stats")
+        self.assertEqual(status, 200)
+
+    def test_admin_scopes_is_refused(self) -> None:
+        with mock.patch.object(ops, "should_proxy_to_api", return_value=False), \
+             mock.patch.object(ops, "memory_list_scopes", return_value={"items": []}):
+            status, _ = self._request("GET", "/admin/scopes")
+        self.assertEqual(status, 200)
+
+    def test_the_ordinary_route_still_works_for_the_bound_user(self) -> None:
+        """Unbound: nothing is filled in, which is the pre-existing behaviour."""
+        with mock.patch.object(ops, "should_proxy_to_api", return_value=False), \
+             mock.patch.object(ops, "memory_add", return_value={"id": "m"}) as add:
+            status, _ = self._request("POST", "/add", {"text": "hello"})
+        self.assertEqual(status, 200)
+        self.assertIsNone(add.call_args.kwargs["user_id"])
+
+
+class McpCarriesThePortabilityBypass(IdentityBindingTestCase):
+    """The remote reach of the portability hole: `/mcp` runs behind
+    `_require_auth`, so `memory_import` is callable by a bound OAuth client."""
+
+    def test_memory_import_over_mcp_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "in.jsonl"
+            source.write_text(json.dumps({"memory": "planted", "user_id": OTHER}) + "\n", encoding="utf-8")
+            with identity_scope(self.identity()):
+                result = agentmemory_mcp.handle_request(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {"name": "memory_import", "arguments": {"path": str(source)}},
+                    }
+                )
+        payload = result["result"]
+        self.assertTrue(payload["isError"])
+        self.assertEqual(payload["structuredContent"]["error_type"], "ProviderIdentityError")
+        self.assertEqual([e for e in self.captured if e["operation"] == "add"], [])
 
 
 if __name__ == "__main__":

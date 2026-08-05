@@ -42,12 +42,14 @@ SCOPED_OPERATIONS = frozenset({
     "list",
     "list_page",
     "reconcile",
-    "export",
 })
 
 # Operations that address one stored record by id. Their scope is whatever the
 # record already carries, so it is resolved from storage rather than the payload.
 RECORD_OPERATIONS = frozenset({"get", "update", "delete"})
+
+# Operations that touch no user-scoped data at all and so need no scope check.
+UNSCOPED_OPERATIONS = frozenset({"health"})
 
 
 @dataclass(frozen=True)
@@ -118,8 +120,21 @@ def enforce_scope(operation_name: str, source: dict[str, Any]) -> dict[str, Any]
     bound = identity.bound_user_id
     if not bound or not enforcement_enabled():
         return source
-    if operation_name not in SCOPED_OPERATIONS:
+    if operation_name in RECORD_OPERATIONS or operation_name in UNSCOPED_OPERATIONS:
         return source
+    if operation_name not in SCOPED_OPERATIONS:
+        # Default deny. An operation that names no scope was previously waved
+        # through, which is how `list_scopes` handed over every other user's id
+        # and `import` planted records under ids taken from a file. The three
+        # sets above are a complete classification of what a bound credential
+        # may do; anything unclassified — including the next operation added —
+        # is refused rather than silently exempt.
+        raise ProviderIdentityError(
+            f"Operation '{operation_name}' is not scoped to a user_id, so it "
+            f"cannot be performed by a credential bound to '{bound}'. Unset "
+            f"AGENTMEMORY_ENFORCE_AUTH_USER_ID, or use a credential without a "
+            f"bound identity, to run it."
+        )
 
     presented = source.get("user_id")
     if presented is None:
@@ -127,6 +142,36 @@ def enforce_scope(operation_name: str, source: dict[str, Any]) -> dict[str, Any]
     if presented != bound:
         raise _mismatch(bound, str(presented))
     return source
+
+
+def guard_admin_surface(path: str) -> None:
+    """Refuse the operator surface to a credential bound to one user.
+
+    `/admin/*` does not dispatch through `OPERATIONS`: those handlers call
+    `runtime.admin`, which reaches `memory_get` / `memory_update` /
+    `memory_delete` / `memory_list` directly, so the wrapper this module is
+    applied in is never entered. They are also behind the same `_require_auth`
+    as every other route — there is no separate operator credential — so a token
+    bound to one user could read, edit and delete another's records by naming
+    them there.
+
+    Scoping the admin views to the bound identity would be a second, parallel
+    implementation of this check on a surface designed for an operator who is
+    meant to see everything. So under enforcement a bound credential is simply
+    refused the surface. Unbound credentials, and every install with the mode
+    off, keep it exactly as before.
+    """
+    if not (path == "/admin" or path.startswith("/admin/")):
+        return
+    identity = current_identity()
+    bound = identity.bound_user_id
+    if not bound or not enforcement_enabled():
+        return
+    raise ProviderIdentityError(
+        f"The admin surface is not scoped to a single user_id, so it is not "
+        f"available to a credential bound to '{bound}'. Use the scoped "
+        f"operations, or a credential without a bound identity."
+    )
 
 
 def enforce_record_scope(operation_name: str, record_user_id: Any) -> None:

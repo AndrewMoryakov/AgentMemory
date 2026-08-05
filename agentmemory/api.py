@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from agentmemory import mcp as mcp_server
 from agentmemory import oauth as oauth_state
-from agentmemory.runtime.identity import AuthIdentity, set_identity
+from agentmemory.runtime.identity import AuthIdentity, guard_admin_surface, set_identity
 from agentmemory.runtime.admin import (
     admin_stats,
     delete_admin_memory,
@@ -625,6 +625,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not self._require_rate_limit(self._rate_limit_key()):
                 return
+            guard_admin_surface(parsed.path)
             if parsed.path == "/admin/stats":
                 self._send(200, admin_stats(limit=_parse_int_query_param(params, "limit", default=500, minimum=1)))
                 return
@@ -698,6 +699,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not self._require_rate_limit(self._rate_limit_key()):
                 return
+            guard_admin_surface(urlparse(self.path).path)
             if self.path == "/mcp":
                 self._handle_mcp_post()
                 return
@@ -778,6 +780,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not self._require_rate_limit(self._rate_limit_key()):
                 return
+            guard_admin_surface(urlparse(self.path).path)
             if self.path.startswith("/admin/memories/"):
                 memory_id = self.path.rsplit("/", 1)[-1]
                 payload = self._read_json()
@@ -807,6 +810,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not self._require_rate_limit(self._rate_limit_key()):
                 return
+            guard_admin_surface(urlparse(self.path).path)
             if self.path.startswith("/admin/memories/"):
                 memory_id = self.path.rsplit("/", 1)[-1]
                 self._send(200, delete_admin_memory(memory_id))
