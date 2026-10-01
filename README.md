@@ -16,6 +16,8 @@ agentmemory configure --provider localjson   # no API keys needed
 agentmemory start-api                        # one local runtime, several client surfaces
 ```
 
+<sub>Run these from the project's virtual environment (activate it, or call `.\.venv\Scripts\agentmemory.exe` / `./.venv/bin/agentmemory`); the [quick start](#quickstart) has the exact steps.</sub>
+
 AgentMemory is a shared local memory runtime for AI clients and agents. It sits above a memory backend (a *provider*: `mem0`, a built-in JSON store, and two experimental adapters) and exposes **one stable set of 14 memory operations** through a CLI, a local HTTP API and an MCP server, so what one tool saves, another can recall. Around that core it adds: an owner-process transport for backends that cannot be opened by many processes at once; one-command wiring into ten AI clients and editors; a remote MCP endpoint with bearer-token and OAuth 2.1 (Dynamic Client Registration) support; JSONL export/import; opt-in memory semantics (dedup, TTL, stale warnings, a read-only conflict check); a `doctor` that explains what is wrong; a browser console; metrics; Docker deployment files; and a provider certification harness for adding new backends.
 
 It is a **public alpha** (version 0.1.0, local-first, not hardened for hostile multi-tenant or open-network use). See [Current Status](#current-status) and [Current Limitations](#current-limitations) before you depend on it.
@@ -237,6 +239,8 @@ What success looks like:
 
 ### Next steps
 
+The quick start installs AgentMemory only into `.venv`, which it never activates. Throughout the rest of this README `agentmemory ...` is shorthand for that environment's executable: either activate the environment once per shell (`.\.venv\Scripts\Activate.ps1` on Windows, `source .venv/bin/activate` on macOS / Linux) or call it by path (`.\.venv\Scripts\agentmemory.exe`, `./.venv/bin/agentmemory`). Otherwise the bare command is not found.
+
 - Connect your AI clients: `agentmemory connect-clients`, then `agentmemory status-clients --compact` ([Client wiring](#client-wiring)).
 - Look at what was stored in the browser console ([Browser UI](#browser-ui); from source it needs a one-time `npm install && npm run build` in `web/`).
 - Run the MCP self-test: `agentmemory mcp-smoke`.
@@ -370,7 +374,7 @@ Served by the local API process (default `127.0.0.1:8765`; `start-api` picks a f
 | `POST /mcp` | MCP over HTTP (JSON-RPC, single or batch) |
 | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`, `/oauth/authorize`, `/oauth/token`, `/register` | OAuth 2.1 and Dynamic Client Registration |
 
-Without a configured token and without OAuth, the API is open (intended for local-only use). With `AGENTMEMORY_API_TOKEN` or OAuth enabled, everything except `/health`, the discovery documents and the OAuth authorize/token/register endpoints requires a bearer credential. Error responses use typed `error_type` values mapped to HTTP statuses.
+Without a configured token and without OAuth, the API is open (intended for local-only use). With `AGENTMEMORY_API_TOKEN` or OAuth enabled, every API and data route requires a bearer credential except `/health` (unauthenticated callers get only `{"ok": true}`), the OAuth discovery documents and the OAuth authorize/token/register endpoints. The browser UI's static files (`/`, `/me`, `/assets/*` and a few root files such as `/favicon.ico`) are also served without a credential; only the data calls the UI makes are protected. On a remote deployment set `AGENTMEMORY_DISABLE_UI=1`. Error responses use typed `error_type` values mapped to HTTP statuses.
 
 ### MCP
 
@@ -454,7 +458,7 @@ Use `localjson` when you want:
 
 ### Claude Memory (experimental)
 
-`claude_memory` is a conservative file-backed adapter over Claude Code memory surfaces: it can read user-level memory, project memory and auto-memory (each switchable with `--no-user-memory` / `--no-auto-memory`), and writes only into an AgentMemory-owned directory (by default `.claude/rules/agentmemory` under the project's Git root). It declares no update, no delete and no scope inventory.
+`claude_memory` is a conservative file-backed adapter over Claude Code memory surfaces: it always reads project memory (`CLAUDE.md` and `CLAUDE.local.md` from the start path up to the project root, `.claude/CLAUDE.md` and `.claude/rules/**/*.md`; there is no option to turn that off), and it can also read user-level memory and auto-memory, each switchable with `--no-user-memory` / `--no-auto-memory`. It writes only into an AgentMemory-owned directory (by default `.claude/rules/agentmemory` under the project's Git root). It declares no update, no delete and no scope inventory.
 
 ### MemPalace (experimental)
 
@@ -491,7 +495,7 @@ Access tokens last 7 days and refresh tokens 30 days; a refresh rotates the pair
 ## Security and identity
 
 - **Local by default.** The API binds `127.0.0.1`; with no token and no OAuth it accepts anonymous local calls. Set `AGENTMEMORY_API_TOKEN` (the root `docker-compose.yml` refuses to start without one) before binding to anything other than loopback.
-- **Guards.** A per-credential token-bucket rate limit (default 60 per minute, `AGENTMEMORY_RATE_LIMIT_PER_MINUTE`), a per-IP cap on `/register`, a request body cap (default 16 MiB, `AGENTMEMORY_MAX_BODY_BYTES`), and `AGENTMEMORY_DISABLE_UI=1` to turn the browser UI off on remote deployments.
+- **Guards.** A per-credential token-bucket rate limit (default 60 per minute, `AGENTMEMORY_RATE_LIMIT_PER_MINUTE`), a per-IP cap on `/register`, a request body cap (default 16 MiB, `AGENTMEMORY_MAX_BODY_BYTES`), and `AGENTMEMORY_DISABLE_UI=1` to turn the browser UI off on remote deployments (its static files are served without a credential even when a token is set; only the data calls behind them are protected).
 - **No end-user authentication.** AgentMemory has no login. By default `user_id` is taken from the request payload, so any valid credential can name any scope.
 - **Opt-in identity binding.** With `AGENTMEMORY_ENFORCE_AUTH_USER_ID=1` and a credential that carries a bound identity (configured per OAuth client, for example `AGENTMEMORY_OAUTH_BOUND_USER_ID`), a matching `user_id` passes, a missing one is filled in, and a different one is refused with `ProviderIdentityError` (HTTP 403). Operations that range over the whole store and the `/admin/*` routes are refused to a bound credential. The check lives in the single wrapper every operation passes through, so HTTP, MCP and CLI share it.
 - **What binding does not give you.** It is not tenant isolation: it is only as trustworthy as whatever issued the token; it is void while dynamic registration is enabled and unbound credentials exist; it must be set on the process clients talk to; `agent_id` and `run_id` are not bound; providers do not partition storage. Read [Auth identity binding](docs/AUTH_IDENTITY_BINDING.md) and [SECURITY.md](SECURITY.md) first.
@@ -544,6 +548,8 @@ cd web && npm install && npm run build
 ```
 
 The Docker image builds it for you. Set `AGENTMEMORY_DISABLE_UI=1` to switch the UI off.
+
+**Authentication.** With a token or OAuth configured, the data requests the UI makes (the `/admin/*` routes) need a bearer credential, but the static page and assets (`/`, `/me`, `/assets/*`, a few root files) are served without one. Do not rely on the token to hide the UI itself; on a remote deployment turn it off with `AGENTMEMORY_DISABLE_UI=1`.
 
 ## Operations and deployment
 
@@ -623,7 +629,7 @@ Quick helper commands:
 
 ## Troubleshooting
 
-- **`agentmemory` not found.** Use the explicit `.venv` paths shown in the quick start.
+- **`agentmemory` not found.** The command lives in `.venv`: activate the environment or use the explicit `.venv` paths shown in the quick start.
 - **API will not start or the port is busy.** Run `doctor` and read the blocking errors; `start-api` selects a free port and updates the runtime config, and distinguishes a stale PID from a foreign listener.
 - **`mem0` fails.** Go back to `localjson`; confirm `OPENROUTER_API_KEY` is set. Some hosts cannot reach the embedding backends; `docs/DEPLOY.md` describes the symptom and a proxy-sidecar workaround.
 - **Browser UI returns 503.** Build the bundle: `cd web && npm install && npm run build`.
